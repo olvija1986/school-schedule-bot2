@@ -778,12 +778,23 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     _log_user(update, "subscribe")
     if not context.args:
+        # Показываем кнопки выбора времени с 06:00 до 20:00
+        rows: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for hour in range(6, 21):
+            t_btn = f"{hour:02d}:00"
+            row.append(InlineKeyboardButton(t_btn, callback_data=f"subtime:{t_btn}"))
+            if len(row) >= 4:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+
+        keyboard = InlineKeyboardMarkup(rows)
         await update.message.reply_text(
-            "Формат: /subscribe HH:MM [сегодня|завтра]\n"
-            "Примеры:\n"
-            "/subscribe 07:30 — расписание на сегодня (по умолчанию)\n"
-            "/subscribe 07:30 завтра — расписание на завтра\n"
-            "/subscribe 07:30 сегодня — расписание на сегодня"
+            "Выбери время, в которое присылать расписание.\n"
+            "Также можно ввести время вручную: /subscribe HH:MM [сегодня|завтра]",
+            reply_markup=keyboard,
         )
         return
     parsed = _parse_hhmm(context.args[0])
@@ -833,6 +844,36 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     day_label = "завтра" if day_type == "tomorrow" else "сегодня"
     await update.message.reply_text(
         f"Ок! Буду присылать расписание на {day_label} каждый день в {t}."
+    )
+
+
+async def subscribe_time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки выбора времени при подписке."""
+    query = update.callback_query
+    await query.answer()
+    _log_user(update, "subscribe_time_callback")
+
+    data = query.data or ""
+    # формат: subtime:HH:MM
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "subtime":
+        await query.edit_message_text("Что-то пошло не так. Попробуй ещё раз: /subscribe")
+        return
+
+    t = f"{parts[1]}:{parts[2]}"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("📅 На сегодня", callback_data=f"subscribe:{parts[1]}:{parts[2]}:today"),
+                InlineKeyboardButton("📅 На завтра", callback_data=f"subscribe:{parts[1]}:{parts[2]}:tomorrow"),
+            ]
+        ]
+    )
+
+    await query.edit_message_text(
+        f"Время {t} выбрано. Какое расписание присылать?",
+        reply_markup=keyboard,
     )
 
 
@@ -1691,6 +1732,7 @@ bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("help", help_command))
 bot_app.add_handler(CommandHandler("subscribe", subscribe))
 bot_app.add_handler(CommandHandler("unsubscribe", unsubscribe))
+bot_app.add_handler(CallbackQueryHandler(subscribe_time_callback, pattern=r"^subtime:"))
 bot_app.add_handler(CallbackQueryHandler(subscribe_callback, pattern=r"^subscribe:"))
 
 edit_conv = ConversationHandler(
