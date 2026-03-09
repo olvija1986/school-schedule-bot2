@@ -25,7 +25,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 # ================== Настройки ==================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_URL = os.environ.get("BOT_URL")  # например: https://school-schedule-bot.onrender.com
+BOT_URL = os.environ.get("BOT_URL")  # например: https://school-schedule-bot2.onrender.com
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
 if not TOKEN or not BOT_URL:
