@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: school-schedule-bot
+    env: python
+    plan: free
+    pythonVersion: 3.11.9
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn bot:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: BOT_URL
+        sync: false
