@@ -1,4 +1,4 @@
-import os, json, uuid, asyncio, httpx, html, re
+import os, json, uuid, asyncio, httpx, html, re, logging
 from datetime import datetime, timedelta, date
 from fastapi import FastAPI, Request
 from zoneinfo import ZoneInfo
@@ -24,6 +24,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 # ================== Настройки ==================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BOT_URL = os.environ.get("BOT_URL")  # например: https://school-schedule-bot2.onrender.com
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
@@ -206,6 +212,24 @@ def _is_admin(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.id in ADMIN_USER_IDS)
 
+def _log_user(update: Update, action: str = "") -> None:
+    """Логирует пользователя, приславшего обновление."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user:
+        return
+    name = user.full_name or ""
+    username = f"@{user.username}" if user.username else "no_username"
+    chat_info = f"chat={chat.id} ({chat.type})" if chat else ""
+    text = ""
+    if update.message and update.message.text:
+        text = f" | text={update.message.text[:80]!r}"
+    elif update.callback_query and update.callback_query.data:
+        text = f" | callback={update.callback_query.data!r}"
+    elif update.inline_query:
+        text = f" | inline_query={update.inline_query.query!r}"
+    logger.info(f"USER id={user.id} {username} ({name}) {chat_info}{text}{(' | ' + action) if action else ''}")
+
 def _save_schedule_to_disk() -> None:
     tmp_path = "schedule.json.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
@@ -356,20 +380,24 @@ def _get_lessons_for_date(d: date) -> tuple[str, list[str]]:
         return day_ru, []
     return day_ru, schedule.get(day_ru, [])
 
-async def _send_daily_reminder(chat_id: int):
-    today = datetime.now(tz=_get_tz()).date()
-    day_eng = today.strftime("%A")
+async def _send_daily_reminder(chat_id: int, day_type: str = "today"):
+    now = datetime.now(tz=_get_tz())
+    target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
+    day_eng = target_date.strftime("%A")
     day_ru = DAY_MAP.get(day_eng, day_eng)
+    date_label = "сегодня" if day_type == "today" else "завтра"
+
     if day_ru == "Суббота":
-        profiles = _get_saturday_profiles_for_date(today)
+        profiles = _get_saturday_profiles_for_date(target_date)
         if profiles:
             parts = [_format_day_table_html(f"Суббота — {label}", lessons) for label, lessons in profiles]
-            text = _truncate_message("📅 Расписание на сегодня (суббота):\n\n" + "\n\n".join(parts))
+            text = _truncate_message(f"📅 Расписание на {date_label} (суббота):\n\n" + "\n\n".join(parts))
         else:
             text = _format_day_table_html("Суббота", [])
     else:
-        day, lessons = _get_lessons_for_date(today)
-        text = _format_day_table_html(day, lessons)
+        day, lessons = _get_lessons_for_date(target_date)
+        header = f"📅 Расписание на {date_label} ({day}):\n\n"
+        text = _truncate_message(header + _format_day_table_html(day, lessons))
     await bot_app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
 
 def _job_id_for(user_id: int) -> str:
@@ -393,11 +421,12 @@ def _reschedule_user(user_id: int):
         return
     hour, minute = parsed
     chat_id = int(entry.get("chat_id"))
+    day_type = entry.get("day_type", "today")
     trigger = CronTrigger(hour=hour, minute=minute, timezone=_get_tz())
     scheduler.add_job(
         _send_daily_reminder,
         trigger=trigger,
-        args=[chat_id],
+        args=[chat_id, day_type],
         id=job_id,
         replace_existing=True,
         misfire_grace_time=3600,
@@ -523,6 +552,7 @@ def _get_saturday_inline_results_for_week() -> list[InlineQueryResultArticle]:
 #   суббота / saturday→ только профили субботы (текущей недели)
 #
 async def inline_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _log_user(update, "inline_query")
     query_text = (update.inline_query.query or "").lower().strip()
     now = datetime.now(tz=_get_tz())
     results = []
@@ -720,6 +750,7 @@ async def inline_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== Команда /start ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _log_user(update, "start")
     await update.message.reply_text(
         "Привет! Я бот для школьного расписания.\n"
         "Используй inline-запрос: @rasp7V_bot today / tomorrow / week\n"
@@ -727,6 +758,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _log_user(update, "help")
     await update.message.reply_text(
         "Команды:\n"
         "/start — приветствие\n"
@@ -734,7 +766,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/edit_schedule — редактировать расписание (если разрешено)\n"
         "/cancel — отменить редактирование\n\n"
         "Напоминания:\n"
-        "/subscribe 07:30 — присылать расписание каждый день в указанное время\n"
+        "/subscribe 07:30 — расписание на сегодня каждый день в указанное время\n"
+        "/subscribe 07:30 завтра — расписание на завтра\n"
         "/unsubscribe — отключить напоминания\n\n"
         "Inline-режим:\n"
         "Набери @бота и выбери подсказку или введи: today / tomorrow / week\n\n"
@@ -743,8 +776,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    _log_user(update, "subscribe")
     if not context.args:
-        await update.message.reply_text("Формат: /subscribe HH:MM (например /subscribe 07:30)")
+        await update.message.reply_text(
+            "Формат: /subscribe HH:MM [сегодня|завтра]\n"
+            "Примеры:\n"
+            "/subscribe 07:30 — расписание на сегодня (по умолчанию)\n"
+            "/subscribe 07:30 завтра — расписание на завтра\n"
+            "/subscribe 07:30 сегодня — расписание на сегодня"
+        )
         return
     parsed = _parse_hhmm(context.args[0])
     if not parsed:
@@ -752,22 +792,86 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     hh, mm = parsed
     t = f"{hh:02d}:{mm:02d}"
+
+    # Если второй аргумент не передан — показываем кнопки выбора
+    if len(context.args) < 2:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📅 На сегодня", callback_data=f"subscribe:{t}:today"),
+                InlineKeyboardButton("📅 На завтра", callback_data=f"subscribe:{t}:tomorrow"),
+            ]
+        ])
+        await update.message.reply_text(
+            f"Время {t} выбрано. Какое расписание присылать?",
+            reply_markup=keyboard,
+        )
+        return
+
+    # Второй аргумент передан напрямую
+    arg2 = context.args[1].lower().strip()
+    if arg2 in ("завтра", "tomorrow"):
+        day_type = "tomorrow"
+    elif arg2 in ("сегодня", "today"):
+        day_type = "today"
+    else:
+        await update.message.reply_text(
+            "Второй параметр должен быть «сегодня» или «завтра».\n"
+            "Пример: /subscribe 07:30 завтра"
+        )
+        return
+
     user = update.effective_user
     chat = update.effective_chat
     if not user or not chat:
         await update.message.reply_text("Не удалось определить пользователя/чат.")
         return
 
-    subscriptions[str(user.id)] = {"chat_id": chat.id, "time": t}
+    subscriptions[str(user.id)] = {"chat_id": chat.id, "time": t, "day_type": day_type}
     _save_subscriptions_to_disk()
     _reschedule_user(user.id)
+
+    day_label = "завтра" if day_type == "tomorrow" else "сегодня"
     await update.message.reply_text(
-        f"Ок! Буду присылать расписание каждый день в {t}.\n"
+        f"Ок! Буду присылать расписание на {day_label} каждый день в {t}."
+    )
+
+
+async def subscribe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нажатия кнопки сегодня/завтра при подписке."""
+    query = update.callback_query
+    await query.answer()
+    _log_user(update, "subscribe_callback")
+
+    data = query.data or ""
+    # формат: subscribe:HH:MM:today|tomorrow
+    parts = data.split(":")
+    if len(parts) != 4 or parts[0] != "subscribe":
+        await query.edit_message_text("Что-то пошло не так. Попробуй ещё раз: /subscribe")
+        return
+
+    t = f"{parts[1]}:{parts[2]}"
+    day_type = parts[3]
+
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        await query.edit_message_text("Не удалось определить пользователя/чат.")
+        return
+
+    subscriptions[str(user.id)] = {"chat_id": chat.id, "time": t, "day_type": day_type}
+    _save_subscriptions_to_disk()
+    _reschedule_user(user.id)
+
+    day_label = "завтра" if day_type == "tomorrow" else "сегодня"
+    logger.info(f"USER id={user.id} subscribed: time={t} day_type={day_type}")
+    await query.edit_message_text(
+        f"✅ Готово! Буду присылать расписание на {day_label} каждый день в {t}."
     )
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    _log_user(update, "unsubscribe")
     user = update.effective_user
     if not user:
         await update.message.reply_text("Не удалось определить пользователя.")
@@ -819,6 +923,7 @@ def _saturday_profile_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 async def edit_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _log_user(update, "edit_schedule_start")
     if not _is_admin(update):
         await update.message.reply_text("У вас нет прав на редактирование расписания.")
         return ConversationHandler.END
@@ -1586,6 +1691,7 @@ bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("help", help_command))
 bot_app.add_handler(CommandHandler("subscribe", subscribe))
 bot_app.add_handler(CommandHandler("unsubscribe", unsubscribe))
+bot_app.add_handler(CallbackQueryHandler(subscribe_callback, pattern=r"^subscribe:"))
 
 edit_conv = ConversationHandler(
     entry_points=[CommandHandler("edit_schedule", edit_schedule_start)],
