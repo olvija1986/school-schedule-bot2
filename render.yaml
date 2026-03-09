@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: school-schedule-bot
+    name: school-schedule-bot2
     env: python
     plan: free
     pythonVersion: 3.11.9
