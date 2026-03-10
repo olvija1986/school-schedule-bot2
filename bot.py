@@ -220,11 +220,7 @@ def _is_admin(update: Update) -> bool:
 
 def _is_admin_user_id(user_id: int) -> bool:
     """Проверка администратора по user_id (для WebApp API)."""
-    if not ADMIN_USER_IDS:
-        return True
-    # Явный админ (на случай, если ADMIN_USER_IDS не настроен на хостинге)
-    if user_id == 1869346832:
-        return True
+    # Для mini‑приложения админом считаем только явно указанных в ADMIN_USER_IDS
     return user_id in ADMIN_USER_IDS
 
 
@@ -2165,6 +2161,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .lesson-row > div:nth-child(4) {
       flex: 0 0 80px;
     }
+    .lesson-btn-add {
+      background: linear-gradient(135deg, #3bb54a, #7ad17f);
+      color: #ffffff;
+    }
+    .lesson-btn-remove {
+      background: linear-gradient(135deg, #e94b3c, #f28a7e);
+      color: #ffffff;
+    }
     @media (max-width: 480px) {
       h1 {
         font-size: 18px;
@@ -2175,16 +2179,17 @@ WEBAPP_HTML = """<!DOCTYPE html>
       button {
         font-size: 13px;
       }
-      /* на мобилке: [кнопки+номер] и время в одном ряду, предмет+кабинет во втором */
-      .lesson-row > div:nth-child(1),
-      .lesson-row > div:nth-child(2) {
-        flex: 1 1 50%;
-        max-width: 50%;
+      .lesson-row > div:nth-child(1) {
+        flex: 0 0 auto;
       }
-      .lesson-row > div:nth-child(3),
+      .lesson-row > div:nth-child(2) {
+        flex: 0 0 130px;
+      }
+      .lesson-row > div:nth-child(3) {
+        flex: 1 1 calc(100% - 130px - 40px);
+      }
       .lesson-row > div:nth-child(4) {
-        flex: 1 1 50%;
-        max-width: 50%;
+        flex: 0 0 70px;
       }
     }
   </style>
@@ -2345,13 +2350,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       row.className = 'row lesson-row';
 
       const numDiv = document.createElement('div');
-      numDiv.style.width = '28px';
+      numDiv.style.display = 'flex';
+      numDiv.style.alignItems = 'center';
+      numDiv.style.gap = '2px';
       numDiv.style.fontSize = '12px';
-      numDiv.style.paddingTop = '8px';
-
       const minusBtn = document.createElement('button');
       minusBtn.textContent = '−';
-      minusBtn.className = 'secondary';
+      minusBtn.className = 'secondary lesson-btn-remove';
       minusBtn.style.padding = '2px 6px';
       minusBtn.style.minWidth = '0';
       minusBtn.addEventListener('click', () => {
@@ -2363,7 +2368,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
       const plusBtn = document.createElement('button');
       plusBtn.textContent = '+';
-      plusBtn.className = 'secondary';
+      plusBtn.className = 'secondary lesson-btn-add';
       plusBtn.style.padding = '2px 6px';
       plusBtn.style.minWidth = '0';
       plusBtn.addEventListener('click', () => {
@@ -2376,7 +2381,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const numLabel = document.createElement('span');
       numLabel.className = 'lesson-index';
       numLabel.textContent = '1.';
-      numLabel.style.marginLeft = '4px';
+      numLabel.style.minWidth = '16px';
 
       numDiv.appendChild(minusBtn);
       numDiv.appendChild(plusBtn);
