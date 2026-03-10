@@ -12,6 +12,7 @@ from telegram import (
     WebAppInfo,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
     Update,
 )
 from telegram.ext import (
@@ -1015,7 +1016,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я бот для школьного расписания.\n"
         "Используй inline-запрос: @rasp7V_bot today / tomorrow / week\n"
-        "Для админов: /edit_schedule — редактировать расписание"
+        "Для админов: /edit_schedule — редактировать расписание",
+        reply_markup=ReplyKeyboardRemove(),
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2092,6 +2094,15 @@ async def startup_event():
     scheduler.start()
 
     await bot_app.start()
+    # Сбрасываем Menu Button (кнопка под полем ввода) — используем /app вместо неё
+    try:
+        await bot_app.bot.delete_my_commands()
+    except Exception:
+        pass
+    try:
+        await bot_app.bot.set_chat_menu_button()  # сброс на дефолт (без WebApp-кнопки)
+    except Exception:
+        pass
     print("✅ Webhook установлен, бот готов к работе")
 
     async def ping_self():
@@ -2798,12 +2809,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
         <span class="sched-btn-label">Неделя</span>
       </button>
     </div>
-    <!-- Дополнительные чипсы -->
-    <div class="sched-chips-row">
+    <!-- Дополнительные чипсы: Основное + Суббота в одном ряду -->
+    <div class="sched-chips-row" id="schedule-secondary-row">
       <button id="btn-week-base" class="sched-chip" data-type="week_base">Основное</button>
+      <button id="btn-saturday" class="sched-chip" data-type="saturday">Суббота</button>
     </div>
+    <!-- Профили субботы (отдельная строка, скрывается если нет профилей) -->
     <div id="schedule-saturday-row" class="sched-chips-row">
-      <button id="btn-saturday"   class="sched-chip" data-type="saturday">Суббота</button>
       <button id="btn-sat-prof-1" class="sched-chip" data-type="sat_profile:Физмат">Физмат</button>
       <button id="btn-sat-prof-2" class="sched-chip" data-type="sat_profile:Биохим">Биохим</button>
       <button id="btn-sat-prof-3" class="sched-chip" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
@@ -3207,17 +3219,17 @@ WEBAPP_HTML = """<!DOCTYPE html>
       }
       isAdmin = !!data.is_admin;
       isSuperAdmin = !!data.is_superadmin;
-      // управление видимостью кнопок субботы
+      // Управление видимостью: кнопка «Суббота» всегда в ряду с «Основное»
+      // Строка профилей показывается только если есть профили
+      const btnSaturday = document.getElementById('btn-saturday');
       if (!data.has_saturday) {
+        if (btnSaturday) btnSaturday.style.display = 'none';
         scheduleSaturdayRow.style.display = 'none';
       } else if (!data.has_saturday_profiles) {
-        scheduleSaturdayRow.style.display = 'flex';
-        document.getElementById('btn-sat-prof-1').style.display = 'none';
-        document.getElementById('btn-sat-prof-2').style.display = 'none';
-        document.getElementById('btn-sat-prof-3').style.display = 'none';
-        document.getElementById('btn-sat-prof-4').style.display = 'none';
-        document.getElementById('btn-sat-prof-5').style.display = 'none';
+        if (btnSaturday) btnSaturday.style.display = '';
+        scheduleSaturdayRow.style.display = 'none';
       } else {
+        if (btnSaturday) btnSaturday.style.display = '';
         scheduleSaturdayRow.style.display = 'flex';
       }
       setStatus('Готово');
