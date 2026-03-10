@@ -2152,14 +2152,15 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .lesson-row > div {
       min-width: 0;
     }
+    /* desktop / tablet: всё в одну строку */
     .lesson-row > div:nth-child(1) {
       flex: 0 0 auto;
     }
     .lesson-row > div:nth-child(2) {
-      flex: 0 0 110px;
+      flex: 0 0 120px;
     }
     .lesson-row > div:nth-child(3) {
-      flex: 1 1 140px;
+      flex: 1 1 160px;
     }
     .lesson-row > div:nth-child(4) {
       flex: 0 0 80px;
@@ -2174,16 +2175,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
       button {
         font-size: 13px;
       }
-      .lesson-row {
-        flex-wrap: wrap;
+      /* на мобилке: [кнопки+номер] и время в одном ряду, предмет+кабинет во втором */
+      .lesson-row > div:nth-child(1),
+      .lesson-row > div:nth-child(2) {
+        flex: 1 1 50%;
+        max-width: 50%;
       }
-      .lesson-row > div:nth-child(2),
       .lesson-row > div:nth-child(3),
       .lesson-row > div:nth-child(4) {
-        flex: 1 1 100%;
-      }
-      .lesson-row > div:nth-child(2) {
-        max-width: 180px;
+        flex: 1 1 50%;
+        max-width: 50%;
       }
     }
   </style>
@@ -2676,6 +2677,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
     adminDayCancel.addEventListener('click', () => {
       adminDayEditor.classList.add('hidden');
       adminModeButtons.classList.remove('hidden');
+    });
+    adminDaySelect.addEventListener('change', () => {
+      if (!adminDayEditor.classList.contains('hidden')) {
+        reloadAdminDay();
+      }
+    });
+    adminDayDate.addEventListener('change', () => {
+      if (!adminDayEditor.classList.contains('hidden')) {
+        reloadAdminDay();
+      }
     });
     adminWeekCancel.addEventListener('click', () => {
       adminWeekEditor.classList.add('hidden');
