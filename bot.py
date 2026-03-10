@@ -2153,13 +2153,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       flex: 0 0 auto;
     }
     .lesson-row > div:nth-child(2) {
-      flex: 0 0 120px;
+      flex: 0 0 130px; /* время */
     }
     .lesson-row > div:nth-child(3) {
-      flex: 1 1 160px;
+      flex: 1 1 140px; /* предмет (чуть короче) */
     }
     .lesson-row > div:nth-child(4) {
-      flex: 0 0 80px;
+      flex: 0 0 90px; /* кабинет шире */
     }
     .lesson-btn-add {
       background: linear-gradient(135deg, #3bb54a, #7ad17f);
@@ -2168,6 +2168,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .lesson-btn-remove {
       background: linear-gradient(135deg, #e94b3c, #f28a7e);
       color: #ffffff;
+    }
+    .lesson-btn-add,
+    .lesson-btn-remove {
+      padding: 2px 6px;
+      min-width: 0;
+      height: 26px;
+      line-height: 22px;
+      box-shadow: none;
     }
     @media (max-width: 480px) {
       h1 {
@@ -2248,8 +2256,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card hidden" id="admin-card">
-    <h2>Админ‑панель</h2>
-    <p style="font-size:12px; margin-top:4px;">
+    <h2 id="admin-title">Админ‑панель</h2>
+    <p id="admin-subtitle" style="font-size:12px; margin-top:4px;">
       Выбери режим редактирования:
     </p>
     <div id="admin-mode-buttons" style="margin-top:4px;">
@@ -2328,6 +2336,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const subSave = document.getElementById('sub-save');
     const subRemove = document.getElementById('sub-remove');
     const adminCard = document.getElementById('admin-card');
+    const adminTitle = document.getElementById('admin-title');
+    const adminSubtitle = document.getElementById('admin-subtitle');
     const adminModeButtons = document.getElementById('admin-mode-buttons');
     const adminDayEditor = document.getElementById('admin-day-editor');
     const adminWeekEditor = document.getElementById('admin-week-editor');
@@ -2352,13 +2362,11 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const numDiv = document.createElement('div');
       numDiv.style.display = 'flex';
       numDiv.style.alignItems = 'center';
-      numDiv.style.gap = '2px';
+      numDiv.style.gap = '4px';
       numDiv.style.fontSize = '12px';
       const minusBtn = document.createElement('button');
       minusBtn.textContent = '−';
       minusBtn.className = 'secondary lesson-btn-remove';
-      minusBtn.style.padding = '2px 6px';
-      minusBtn.style.minWidth = '0';
       minusBtn.addEventListener('click', () => {
         if (adminLessonRows.children.length > 1) {
           adminLessonRows.removeChild(row);
@@ -2369,8 +2377,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const plusBtn = document.createElement('button');
       plusBtn.textContent = '+';
       plusBtn.className = 'secondary lesson-btn-add';
-      plusBtn.style.padding = '2px 6px';
-      plusBtn.style.minWidth = '0';
       plusBtn.addEventListener('click', () => {
         const cloneData = Object.assign({}, data);
         const newRow = createLessonRow(cloneData);
@@ -2381,7 +2387,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const numLabel = document.createElement('span');
       numLabel.className = 'lesson-index';
       numLabel.textContent = '1.';
-      numLabel.style.minWidth = '16px';
+      numLabel.style.minWidth = '18px';
 
       numDiv.appendChild(minusBtn);
       numDiv.appendChild(plusBtn);
@@ -2674,6 +2680,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
       adminDayEditor.classList.remove('hidden');
+      adminTitle.classList.add('hidden');
+      adminSubtitle.classList.add('hidden');
       reloadAdminDay();
     });
     document.getElementById('admin-mode-week').addEventListener('click', () => {
@@ -2684,6 +2692,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     adminDayCancel.addEventListener('click', () => {
       adminDayEditor.classList.add('hidden');
       adminModeButtons.classList.remove('hidden');
+      adminTitle.classList.remove('hidden');
+      adminSubtitle.classList.remove('hidden');
     });
     adminDaySelect.addEventListener('change', () => {
       if (!adminDayEditor.classList.contains('hidden')) {
@@ -2698,6 +2708,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     adminWeekCancel.addEventListener('click', () => {
       adminWeekEditor.classList.add('hidden');
       adminModeButtons.classList.remove('hidden');
+      adminTitle.classList.remove('hidden');
+      adminSubtitle.classList.remove('hidden');
     });
     adminWeekSave.addEventListener('click', saveAdminWeek);
     adminDaySave.addEventListener('click', saveAdminDay);
