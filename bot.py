@@ -2492,6 +2492,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const subCard = document.getElementById('sub-card');
     const scheduleSaturdayRow = document.getElementById('schedule-saturday-row');
 
+    let isAdmin = false;
+
     function setStatus(text, isError) {
       statusEl.textContent = text || '';
       statusEl.style.color = isError ? '#d33' : 'var(--tg-theme-hint-color, #888)';
@@ -2503,7 +2505,9 @@ WEBAPP_HTML = """<!DOCTYPE html>
       tabBtnAdmin.classList.toggle('inactive', tab !== 'admin');
       scheduleCard.classList.toggle('hidden', tab !== 'schedule');
       subCard.classList.toggle('hidden', tab !== 'sub');
-      adminCard.classList.toggle('hidden', tab !== 'admin');
+      // Админ‑карточка видна только на вкладке "Админка" и только для админов
+      const showAdmin = tab === 'admin' && isAdmin;
+      adminCard.classList.toggle('hidden', !showAdmin);
     }
 
     async function api(path, payload) {
@@ -2544,9 +2548,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       } else {
         subInfo.textContent = 'Подписка не настроена.';
       }
-      if (data.is_admin) {
-        adminCard.classList.remove('hidden');
-      }
+      isAdmin = !!data.is_admin;
       // управление видимостью кнопок субботы
       if (!data.has_saturday) {
         scheduleSaturdayRow.style.display = 'none';
