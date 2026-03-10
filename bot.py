@@ -2153,21 +2153,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       flex: 0 0 auto;
     }
     .lesson-row > div:nth-child(2) {
-      flex: 0 0 130px; /* время */
+      flex: 0 0 120px; /* время */
     }
     .lesson-row > div:nth-child(3) {
-      flex: 1 1 140px; /* предмет (чуть короче) */
+      flex: 1 1 110px; /* предмет чуть короче */
     }
     .lesson-row > div:nth-child(4) {
-      flex: 0 0 90px; /* кабинет шире */
-    }
-    .lesson-btn-add {
-      background: linear-gradient(135deg, #3bb54a, #7ad17f);
-      color: #ffffff;
-    }
-    .lesson-btn-remove {
-      background: linear-gradient(135deg, #e94b3c, #f28a7e);
-      color: #ffffff;
+      flex: 0 0 100px; /* кабинет шире */
     }
     .lesson-btn-add,
     .lesson-btn-remove {
@@ -2176,6 +2168,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
       height: 26px;
       line-height: 22px;
       box-shadow: none;
+      border-radius: 999px;
+      border: none;
+      color: #ffffff;
+      font-size: 12px;
+    }
+    .lesson-btn-add {
+      background: linear-gradient(135deg, #24b34b, #4edc7e);
+    }
+    .lesson-btn-remove {
+      background: linear-gradient(135deg, #e24545, #ff8a7a);
     }
     @media (max-width: 480px) {
       h1 {
@@ -2366,7 +2368,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       numDiv.style.fontSize = '12px';
       const minusBtn = document.createElement('button');
       minusBtn.textContent = '−';
-      minusBtn.className = 'secondary lesson-btn-remove';
+      minusBtn.className = 'lesson-btn-remove';
       minusBtn.addEventListener('click', () => {
         if (adminLessonRows.children.length > 1) {
           adminLessonRows.removeChild(row);
@@ -2376,7 +2378,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
       const plusBtn = document.createElement('button');
       plusBtn.textContent = '+';
-      plusBtn.className = 'secondary lesson-btn-add';
+      plusBtn.className = 'lesson-btn-add';
       plusBtn.addEventListener('click', () => {
         const cloneData = Object.assign({}, data);
         const newRow = createLessonRow(cloneData);
