@@ -504,15 +504,24 @@ def _format_week_text_base() -> str:
     return "\n\n".join(blocks) if blocks else _format_day_table_html("Неделя", [])
 
 
+def _nearest_saturday_profiles() -> list[tuple[str, list[str]]]:
+    """Профили ближайшей субботы текущей недели с учётом временных замен."""
+    now_tz = datetime.now(tz=_get_tz())
+    today_idx = now_tz.weekday()
+    delta = 5 - today_idx  # 5 = суббота
+    sat_date = (now_tz + timedelta(days=delta)).date()
+    return _get_saturday_profiles_for_date(sat_date)
+
+
 def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
     """HTML‑текст расписания для различных режимов (для WebApp API)."""
     now = datetime.now(tz=_get_tz())
     if day_type == "week":
+        # Неделя с учётом временных замен
+        return _truncate_message(_format_week_text())
+    if day_type == "week_base":
         # Базовое расписание на неделю (без временных замен)
         return _truncate_message(_format_week_text_base())
-    if day_type == "week_temp":
-        # Основное расписание с учётом временных замен
-        return _truncate_message(_format_week_text())
     if day_type.startswith("sat_profile:"):
         profile_key = day_type.split("sat_profile:", 1)[1]
         now_tz = datetime.now(tz=_get_tz())
@@ -526,11 +535,7 @@ def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
                 return _truncate_message(_format_day_table_html(f"Суббота — {label}", lessons))
         return "Нет занятий для выбранного профиля субботы."
     if day_type == "saturday":
-        now_tz = datetime.now(tz=_get_tz())
-        today_idx = now_tz.weekday()
-        delta = 5 - today_idx
-        sat_date = (now_tz + timedelta(days=delta)).date()
-        profiles = _get_saturday_profiles_for_date(sat_date)
+        profiles = _nearest_saturday_profiles()
         if not profiles:
             return _format_day_table_html("Суббота", [])
         if len(profiles) == 1 and profiles[0][0] == "Суббота":
@@ -2159,16 +2164,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
     <div>
       <button class="sched-btn" data-type="today">Сегодня</button>
       <button class="sched-btn" data-type="tomorrow">Завтра</button>
-      <button class="sched-btn" data-type="week">Неделя (Пн–Пт, базовая)</button>
-      <button class="sched-btn" data-type="week_temp">Основное расписание</button>
+      <button class="sched-btn" data-type="week">Неделя</button>
     </div>
-    <div style="margin-top:6px;">
-      <button class="sched-btn" data-type="saturday">Суббота</button>
-      <button class="sched-btn" data-type="sat_profile:Физмат">Физмат</button>
-      <button class="sched-btn" data-type="sat_profile:Биохим">Биохим</button>
-      <button class="sched-btn" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
-      <button class="sched-btn" data-type="sat_profile:Инфотех_2">Инфотех 2</button>
-      <button class="sched-btn" data-type="sat_profile:Общеобразовательный_3">Общеобр. 3</button>
+    <div id="schedule-saturday-row" style="margin-top:6px;">
+      <button id="btn-saturday" class="sched-btn" data-type="saturday">Суббота</button>
+      <button id="btn-week-base" class="sched-btn" data-type="week_base">Основное расписание</button>
+      <button id="btn-sat-prof-1" class="sched-btn" data-type="sat_profile:Физмат">Физмат</button>
+      <button id="btn-sat-prof-2" class="sched-btn" data-type="sat_profile:Биохим">Биохим</button>
+      <button id="btn-sat-prof-3" class="sched-btn" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
+      <button id="btn-sat-prof-4" class="sched-btn" data-type="sat_profile:Инфотех_2">Инфотех 2</button>
+      <button id="btn-sat-prof-5" class="sched-btn" data-type="sat_profile:Общеобразовательный_3">Общеобр. 3</button>
     </div>
     <div id="schedule-box"></div>
   </div>
@@ -2349,6 +2354,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const tabBtnAdmin = document.getElementById('tab-btn-admin');
     const scheduleCard = document.getElementById('schedule-card');
     const subCard = document.getElementById('sub-card');
+    const scheduleSaturdayRow = document.getElementById('schedule-saturday-row');
 
     function setStatus(text, isError) {
       statusEl.textContent = text || '';
@@ -2404,6 +2410,19 @@ WEBAPP_HTML = """<!DOCTYPE html>
       }
       if (data.is_admin) {
         adminCard.classList.remove('hidden');
+      }
+      // управление видимостью кнопок субботы
+      if (!data.has_saturday) {
+        scheduleSaturdayRow.style.display = 'none';
+      } else if (!data.has_saturday_profiles) {
+        scheduleSaturdayRow.style.display = 'flex';
+        document.getElementById('btn-sat-prof-1').style.display = 'none';
+        document.getElementById('btn-sat-prof-2').style.display = 'none';
+        document.getElementById('btn-sat-prof-3').style.display = 'none';
+        document.getElementById('btn-sat-prof-4').style.display = 'none';
+        document.getElementById('btn-sat-prof-5').style.display = 'none';
+      } else {
+        scheduleSaturdayRow.style.display = 'flex';
       }
       setStatus('Готово');
     }
@@ -2553,12 +2572,22 @@ async def api_me(request: Request):
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
     sub = subscriptions.get(str(user_id))
+    sat_profiles = _nearest_saturday_profiles()
+    has_saturday = bool(sat_profiles)
+    has_saturday_profiles = False
+    if sat_profiles:
+        if len(sat_profiles) == 1 and sat_profiles[0][0] == "Суббота":
+            has_saturday_profiles = False
+        else:
+            has_saturday_profiles = True
     return JSONResponse(
         {
             "ok": True,
             "user": {"id": user_id, "first_name": user.get("first_name", "")},
             "is_admin": _is_admin_user_id(user_id),
             "subscription": sub,
+            "has_saturday": has_saturday,
+            "has_saturday_profiles": has_saturday_profiles,
         }
     )
 
