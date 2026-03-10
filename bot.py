@@ -2373,6 +2373,75 @@ WEBAPP_HTML = """<!DOCTYPE html>
       margin-bottom: 2px;
       padding-left: 2px;
     }
+    /* ── Fullscreen редакторы ── */
+    .admin-fullscreen {
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: var(--tg-theme-bg-color, #fff);
+      padding: 0;
+    }
+    .admin-fullscreen.hidden { display: none !important; }
+    .editor-topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.08);
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      flex-shrink: 0;
+    }
+    .editor-back-btn {
+      padding: 6px 12px;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .editor-topbar-right {
+      display: flex;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+      justify-content: flex-end;
+    }
+    .editor-topbar-right input,
+    .editor-topbar-right select {
+      width: auto;
+      flex: 1 1 0;
+      min-width: 0;
+      max-width: 160px;
+    }
+    .editor-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+    }
+    .editor-textarea {
+      flex: 1;
+      width: 100%;
+      box-sizing: border-box;
+      resize: none;
+      border: none;
+      border-radius: 0;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      background: var(--tg-theme-bg-color, #fff);
+      color: var(--tg-theme-text-color, #000);
+      outline: none;
+      margin: 0;
+      height: auto;
+    }
+    .editor-bottombar {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid rgba(0,0,0,0.08);
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      flex-shrink: 0;
+    }
     @media (max-width: 480px) {
       h1 { font-size: 18px; }
       h2 { font-size: 14px; }
@@ -2434,68 +2503,53 @@ WEBAPP_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card hidden" id="admin-card">
-    <h2 id="admin-title">Админ‑панель</h2>
-    <p id="admin-subtitle" style="font-size:12px; margin-top:4px;">
-      Выбери режим редактирования:
-    </p>
-    <div id="admin-mode-buttons" style="margin-top:4px;">
+    <div id="admin-mode-buttons">
       <div class="row">
         <button id="admin-type-base">Основное</button>
         <button id="admin-type-temp" class="secondary">Временное</button>
       </div>
-      <div class="row" style="margin-top:4px;">
-        <button id="admin-mode-day">День</button>
-        <button id="admin-mode-week" class="secondary">Вся неделя</button>
+      <div class="row" style="margin-top:6px;">
+        <button id="admin-mode-day">Редактировать день</button>
+        <button id="admin-mode-week" class="secondary">Редактировать неделю</button>
       </div>
     </div>
 
-    <div id="admin-day-editor" class="hidden">
-      <p style="font-size:12px; margin:8px 0 4px;">
-        Выбери день и укажи предметы и кабинеты.
-      </p>
-      <div class="row" id="admin-day-date-wrap">
-        <div style="flex:1;">
-          <label>Дата (для временного режима)</label>
-          <input id="admin-day-date" type="date" />
+    <!-- Редактор дня -->
+    <div id="admin-day-editor" class="hidden admin-fullscreen">
+      <div class="editor-topbar">
+        <button id="admin-day-cancel" class="secondary editor-back-btn">← Назад</button>
+        <div class="editor-topbar-right">
+          <div class="row" id="admin-day-date-wrap" style="margin:0;">
+            <input id="admin-day-date" type="date" style="height:32px;margin:0;font-size:12px;" />
+          </div>
+          <select id="admin-day-select" style="height:32px;margin:0;font-size:12px;width:auto;">
+            <option value="Понедельник">Понедельник</option>
+            <option value="Вторник">Вторник</option>
+            <option value="Среда">Среда</option>
+            <option value="Четверг">Четверг</option>
+            <option value="Пятница">Пятница</option>
+            <option value="Суббота">Суббота</option>
+            <option value="Воскресенье">Воскресенье</option>
+          </select>
         </div>
       </div>
-      <select id="admin-day-select">
-        <option value="Понедельник">Понедельник</option>
-        <option value="Вторник">Вторник</option>
-        <option value="Среда">Среда</option>
-        <option value="Четверг">Четверг</option>
-        <option value="Пятница">Пятница</option>
-        <option value="Суббота">Суббота</option>
-        <option value="Воскресенье">Воскресенье</option>
-      </select>
-      <div style="margin-top:6px;">
-        <div style="font-size:12px; margin-bottom:4px; color: var(--tg-theme-hint-color, #777);">
-          Укажи время, предмет и кабинет для каждого урока:
-        </div>
+      <div class="editor-scroll">
         <div id="admin-lesson-rows"></div>
       </div>
-      <div style="margin-top:8px; display:flex; gap:8px;">
-        <button id="admin-day-save">Сохранить день</button>
-        <button id="admin-day-cancel" class="secondary">Назад к выбору режима</button>
+      <div class="editor-bottombar">
+        <button id="admin-day-save" style="flex:1;">Сохранить день</button>
       </div>
     </div>
 
-    <div id="admin-week-editor" class="hidden">
-      <p style="font-size:12px; margin:8px 0 4px;">
-        Формат как в /edit_schedule (вся неделя). Пример:
-      </p>
-      <pre style="font-size:11px; white-space:pre-wrap; margin:4px 0 6px;">
-Понедельник:
-08:30-09:05 Математика/211
-
-Вторник:
-08:30-09:05 Русский язык/305
-      </pre>
-      <textarea id="admin-week-text" placeholder="Вставь расписание на неделю..."></textarea>
-      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-        <button id="admin-week-load" class="secondary">📥 Загрузить текущее</button>
-        <button id="admin-week-save">Сохранить неделю</button>
-        <button id="admin-week-cancel" class="secondary">Назад к выбору режима</button>
+    <!-- Редактор недели -->
+    <div id="admin-week-editor" class="hidden admin-fullscreen">
+      <div class="editor-topbar">
+        <button id="admin-week-cancel" class="secondary editor-back-btn">← Назад</button>
+        <button id="admin-week-load" class="secondary" style="font-size:12px;padding:6px 10px;">📥 Загрузить</button>
+      </div>
+      <textarea id="admin-week-text" class="editor-textarea" placeholder="Понедельник:&#10;08:00-08:40 Математика/211&#10;&#10;Вторник:&#10;08:00-08:40 Русский яз./305"></textarea>
+      <div class="editor-bottombar">
+        <button id="admin-week-save" style="flex:1;">Сохранить неделю</button>
       </div>
     </div>
   </div>
@@ -2515,8 +2569,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const subSave = document.getElementById('sub-save');
     const subRemove = document.getElementById('sub-remove');
     const adminCard = document.getElementById('admin-card');
-    const adminTitle = document.getElementById('admin-title');
-    const adminSubtitle = document.getElementById('admin-subtitle');
     const adminModeButtons = document.getElementById('admin-mode-buttons');
     const adminDayEditor = document.getElementById('admin-day-editor');
     const adminWeekEditor = document.getElementById('admin-week-editor');
@@ -2877,6 +2929,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminTypeBase.classList.remove('secondary');
       adminTypeTemp.classList.add('secondary');
       adminDayDateWrap.classList.add('hidden');
+      const loadBtn = document.getElementById('admin-week-load');
+      if (loadBtn) loadBtn.textContent = '📥 Загрузить основное';
       if (!adminDayEditor.classList.contains('hidden')) {
         reloadAdminDay();
       }
@@ -2886,6 +2940,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminTypeTemp.classList.remove('secondary');
       adminTypeBase.classList.add('secondary');
       adminDayDateWrap.classList.remove('hidden');
+      const loadBtn = document.getElementById('admin-week-load');
+      if (loadBtn) loadBtn.textContent = '📥 Загрузить текущее';
       if (!adminDayEditor.classList.contains('hidden')) {
         reloadAdminDay();
       }
@@ -2894,8 +2950,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
       adminDayEditor.classList.remove('hidden');
-      adminTitle.classList.add('hidden');
-      adminSubtitle.classList.add('hidden');
       reloadAdminDay();
     });
     document.getElementById('admin-mode-week').addEventListener('click', () => {
@@ -2906,8 +2960,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
     adminDayCancel.addEventListener('click', () => {
       adminDayEditor.classList.add('hidden');
       adminModeButtons.classList.remove('hidden');
-      adminTitle.classList.remove('hidden');
-      adminSubtitle.classList.remove('hidden');
     });
     adminDaySelect.addEventListener('change', () => {
       if (!adminDayEditor.classList.contains('hidden')) {
@@ -2922,8 +2974,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
     adminWeekCancel.addEventListener('click', () => {
       adminWeekEditor.classList.add('hidden');
       adminModeButtons.classList.remove('hidden');
-      adminTitle.classList.remove('hidden');
-      adminSubtitle.classList.remove('hidden');
     });
     document.getElementById('admin-week-load').addEventListener('click', async () => {
       try {
