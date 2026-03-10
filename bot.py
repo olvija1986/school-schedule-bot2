@@ -2140,38 +2140,74 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .hidden {
       display: none !important;
     }
-    /* Строки уроков — адаптивная верстка для телефона */
+    /* Строки уроков — карточная вёрстка для мобильного */
     .lesson-row {
-      align-items: flex-start;
-      flex-wrap: wrap;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 6px;
+      margin-bottom: 6px;
+      border-radius: 10px;
+      background: var(--tg-theme-bg-color, #fff);
+      border: 1px solid rgba(0,0,0,0.08);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     }
-    .lesson-row > div {
+    .lesson-row-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .lesson-row-bottom {
+      display: flex;
+      gap: 6px;
+    }
+    .lesson-row-bottom .lesson-subject-wrap {
+      flex: 1 1 0;
       min-width: 0;
     }
-    /* desktop / tablet: всё в одну строку */
-    .lesson-row > div:nth-child(1) {
-      flex: 0 0 auto;
+    .lesson-row-bottom .lesson-room-wrap {
+      flex: 0 0 72px;
     }
-    .lesson-row > div:nth-child(2) {
-      flex: 0 0 120px; /* время */
+    .lesson-index {
+      font-size: 13px;
+      font-weight: 600;
+      min-width: 22px;
+      color: var(--tg-theme-hint-color, #888);
     }
-    .lesson-row > div:nth-child(3) {
-      flex: 1 1 110px; /* предмет чуть короче */
+    .lesson-times {
+      display: flex;
+      gap: 4px;
+      flex: 1 1 0;
     }
-    .lesson-row > div:nth-child(4) {
-      flex: 0 0 100px; /* кабинет шире */
+    .lesson-times input {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 4px 6px;
+      font-size: 13px;
+      height: 32px;
+      margin-top: 0;
+      text-align: center;
+    }
+    .lesson-row-bottom input {
+      padding: 4px 8px;
+      font-size: 13px;
+      height: 34px;
+      margin-top: 0;
     }
     .lesson-btn-add,
     .lesson-btn-remove {
-      padding: 2px 6px;
-      min-width: 0;
-      height: 26px;
-      line-height: 22px;
+      padding: 0;
+      min-width: 28px;
+      width: 28px;
+      height: 28px;
+      line-height: 28px;
+      text-align: center;
       box-shadow: none;
-      border-radius: 999px;
+      border-radius: 50%;
       border: none;
       color: #ffffff;
-      font-size: 12px;
+      font-size: 16px;
+      flex-shrink: 0;
     }
     .lesson-btn-add {
       background: linear-gradient(135deg, #24b34b, #4edc7e);
@@ -2180,27 +2216,9 @@ WEBAPP_HTML = """<!DOCTYPE html>
       background: linear-gradient(135deg, #e24545, #ff8a7a);
     }
     @media (max-width: 480px) {
-      h1 {
-        font-size: 18px;
-      }
-      h2 {
-        font-size: 14px;
-      }
-      button {
-        font-size: 13px;
-      }
-      .lesson-row > div:nth-child(1) {
-        flex: 0 0 auto;
-      }
-      .lesson-row > div:nth-child(2) {
-        flex: 0 0 130px;
-      }
-      .lesson-row > div:nth-child(3) {
-        flex: 1 1 calc(100% - 130px - 40px);
-      }
-      .lesson-row > div:nth-child(4) {
-        flex: 0 0 70px;
-      }
+      h1 { font-size: 18px; }
+      h2 { font-size: 14px; }
+      button { font-size: 13px; }
     }
   </style>
 </head>
@@ -2359,15 +2377,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
     function createLessonRow(data) {
       const row = document.createElement('div');
-      row.className = 'row lesson-row';
+      row.className = 'lesson-row';
 
-      const numDiv = document.createElement('div');
-      numDiv.style.display = 'flex';
-      numDiv.style.alignItems = 'center';
-      numDiv.style.gap = '4px';
-      numDiv.style.fontSize = '12px';
+      // --- Top line: [minus] [plus] N.  [start] [end] ---
+      const topDiv = document.createElement('div');
+      topDiv.className = 'lesson-row-top';
+
       const minusBtn = document.createElement('button');
-      minusBtn.textContent = '−';
+      minusBtn.textContent = '\u2212';
       minusBtn.className = 'lesson-btn-remove';
       minusBtn.addEventListener('click', () => {
         if (adminLessonRows.children.length > 1) {
@@ -2380,8 +2397,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       plusBtn.textContent = '+';
       plusBtn.className = 'lesson-btn-add';
       plusBtn.addEventListener('click', () => {
-        const cloneData = Object.assign({}, data);
-        const newRow = createLessonRow(cloneData);
+        const snapshot = {
+          start: row.querySelector('.lesson-start').value,
+          end: row.querySelector('.lesson-end').value,
+          subject: '',
+          room: '',
+        };
+        const newRow = createLessonRow(snapshot);
         adminLessonRows.insertBefore(newRow, row.nextSibling);
         renumberLessonRows();
       });
@@ -2389,49 +2411,53 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const numLabel = document.createElement('span');
       numLabel.className = 'lesson-index';
       numLabel.textContent = '1.';
-      numLabel.style.minWidth = '18px';
 
-      numDiv.appendChild(minusBtn);
-      numDiv.appendChild(plusBtn);
-      numDiv.appendChild(numLabel);
+      const timesDiv = document.createElement('div');
+      timesDiv.className = 'lesson-times';
 
-      const timeDiv = document.createElement('div');
-      timeDiv.style.display = 'flex';
-      timeDiv.style.gap = '4px';
-      timeDiv.style.alignItems = 'center';
-      timeDiv.style.width = '90px';
       const startInput = document.createElement('input');
       startInput.type = 'time';
       startInput.className = 'lesson-start';
-      startInput.style.padding = '4px';
       startInput.value = data.start || '';
+
       const endInput = document.createElement('input');
       endInput.type = 'time';
       endInput.className = 'lesson-end';
-      endInput.style.padding = '4px';
       endInput.value = data.end || '';
-      timeDiv.appendChild(startInput);
-      timeDiv.appendChild(endInput);
 
-      const subjDiv = document.createElement('div');
+      timesDiv.appendChild(startInput);
+      timesDiv.appendChild(endInput);
+
+      topDiv.appendChild(minusBtn);
+      topDiv.appendChild(plusBtn);
+      topDiv.appendChild(numLabel);
+      topDiv.appendChild(timesDiv);
+
+      // --- Bottom line: [Предмет (wide)] [Каб. (narrow)] ---
+      const bottomDiv = document.createElement('div');
+      bottomDiv.className = 'lesson-row-bottom';
+
+      const subjWrap = document.createElement('div');
+      subjWrap.className = 'lesson-subject-wrap';
       const subjInput = document.createElement('input');
-      subjInput.placeholder = 'Предмет';
+      subjInput.placeholder = '\u041f\u0440\u0435\u0434\u043c\u0435\u0442';
       subjInput.className = 'lesson-subject';
       subjInput.value = data.subject || '';
-      subjDiv.appendChild(subjInput);
+      subjWrap.appendChild(subjInput);
 
-      const roomDiv = document.createElement('div');
-      roomDiv.style.maxWidth = '80px';
+      const roomWrap = document.createElement('div');
+      roomWrap.className = 'lesson-room-wrap';
       const roomInput = document.createElement('input');
-      roomInput.placeholder = 'Каб.';
+      roomInput.placeholder = '\u041a\u0430\u0431.';
       roomInput.className = 'lesson-room';
       roomInput.value = data.room || '';
-      roomDiv.appendChild(roomInput);
+      roomWrap.appendChild(roomInput);
 
-      row.appendChild(numDiv);
-      row.appendChild(timeDiv);
-      row.appendChild(subjDiv);
-      row.appendChild(roomDiv);
+      bottomDiv.appendChild(subjWrap);
+      bottomDiv.appendChild(roomWrap);
+
+      row.appendChild(topDiv);
+      row.appendChild(bottomDiv);
 
       return row;
     }
