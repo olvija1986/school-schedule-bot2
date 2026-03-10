@@ -1977,17 +1977,29 @@ WEBAPP_HTML = """<!DOCTYPE html>
     button {
       padding: 8px 12px;
       margin: 2px;
-      border-radius: 8px;
+      border-radius: 999px;
       border: none;
       cursor: pointer;
-      background: var(--tg-theme-button-color, #2a9df4);
-      color: var(--tg-theme-button-text-color, #ffffff);
+      background: linear-gradient(135deg, #4e8cff, #8f6bff);
+      color: #ffffff;
       font-size: 14px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+      transition: transform 0.08s ease-out, box-shadow 0.08s ease-out, opacity 0.1s;
+    }
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 3px 8px rgba(0,0,0,0.16);
+    }
+    button:active {
+      transform: translateY(0);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+      opacity: 0.9;
     }
     button.secondary {
-      background: transparent;
-      color: var(--tg-theme-hint-color, #888);
-      border: 1px solid rgba(0,0,0,0.1);
+      background: linear-gradient(135deg, #f1f3f6, #e2e6ec);
+      color: var(--tg-theme-hint-color, #555);
+      box-shadow: none;
+      border: 1px solid rgba(0,0,0,0.06);
     }
     #schedule-box {
       margin-top: 8px;
@@ -2014,6 +2026,10 @@ WEBAPP_HTML = """<!DOCTYPE html>
       margin-top: 4px;
       background: var(--tg-theme-bg-color, #ffffff);
       color: var(--tg-theme-text-color, #000000);
+    }
+    input, select {
+      height: 36px;
+      line-height: 24px;
     }
     textarea {
       min-height: 140px;
@@ -2042,13 +2058,39 @@ WEBAPP_HTML = """<!DOCTYPE html>
       font-size: 11px;
       background: rgba(0,0,0,0.06);
     }
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      margin-bottom: 4px;
+    }
+    .tab-btn {
+      flex: 1;
+      text-align: center;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .tab-btn.inactive {
+      background: linear-gradient(135deg, #f1f3f6, #e2e6ec);
+      color: var(--tg-theme-hint-color, #555);
+      box-shadow: none;
+    }
+    .hidden {
+      display: none !important;
+    }
   </style>
 </head>
 <body>
   <h1>Школьное расписание</h1>
   <div id="status">Загрузка...</div>
 
-  <div class="card">
+  <div class="tabs">
+    <button id="tab-btn-schedule" class="tab-btn">Расписание</button>
+    <button id="tab-btn-sub" class="tab-btn inactive">Подписка</button>
+    <button id="tab-btn-admin" class="tab-btn inactive">Админка</button>
+  </div>
+
+  <div class="card" id="schedule-card">
     <h2>Расписание</h2>
     <div>
       <button data-type="today">Сегодня</button>
@@ -2058,7 +2100,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
     <div id="schedule-box"></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="sub-card">
     <h2>Подписка</h2>
     <div id="sub-info"></div>
     <div class="row">
@@ -2080,22 +2122,53 @@ WEBAPP_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <div class="card" id="admin-card" style="display:none;">
-    <h2>Админ‑редактор (неделя)</h2>
+  <div class="card hidden" id="admin-card">
+    <h2>Админ‑панель</h2>
     <div><span class="badge">Только для админов</span></div>
     <p style="font-size:12px; margin-top:4px;">
-      Формат как в /edit_schedule (вся неделя). Пример:
+      Выбери режим редактирования:
     </p>
-    <pre style="font-size:11px; white-space:pre-wrap; margin:4px 0 6px;">
+    <div id="admin-mode-buttons" style="margin-top:4px;">
+      <button id="admin-mode-day">День</button>
+      <button id="admin-mode-week" class="secondary">Вся неделя</button>
+    </div>
+
+    <div id="admin-day-editor" class="hidden">
+      <p style="font-size:12px; margin:8px 0 4px;">
+        Выбери день и укажи занятия (по одной строке на урок).
+      </p>
+      <select id="admin-day-select">
+        <option value="Понедельник">Понедельник</option>
+        <option value="Вторник">Вторник</option>
+        <option value="Среда">Среда</option>
+        <option value="Четверг">Четверг</option>
+        <option value="Пятница">Пятница</option>
+        <option value="Суббота">Суббота</option>
+        <option value="Воскресенье">Воскресенье</option>
+      </select>
+      <textarea id="admin-day-text" placeholder="13:30-14:10 Математика/211&#10;14:20-15:00 Информатика/304"></textarea>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <button id="admin-day-save">Сохранить день</button>
+        <button id="admin-day-cancel" class="secondary">Назад к выбору режима</button>
+      </div>
+    </div>
+
+    <div id="admin-week-editor" class="hidden">
+      <p style="font-size:12px; margin:8px 0 4px;">
+        Формат как в /edit_schedule (вся неделя). Пример:
+      </p>
+      <pre style="font-size:11px; white-space:pre-wrap; margin:4px 0 6px;">
 Понедельник:
 08:30-09:05 Математика/211
 
 Вторник:
 08:30-09:05 Русский язык/305
-    </pre>
-    <textarea id="admin-week-text" placeholder="Вставь расписание на неделю..."></textarea>
-    <div style="margin-top:8px;">
-      <button id="admin-save">Сохранить неделю</button>
+      </pre>
+      <textarea id="admin-week-text" placeholder="Вставь расписание на неделю..."></textarea>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <button id="admin-week-save">Сохранить неделю</button>
+        <button id="admin-week-cancel" class="secondary">Назад к выбору режима</button>
+      </div>
     </div>
   </div>
 
@@ -2114,12 +2187,35 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const subSave = document.getElementById('sub-save');
     const subRemove = document.getElementById('sub-remove');
     const adminCard = document.getElementById('admin-card');
+    const adminModeButtons = document.getElementById('admin-mode-buttons');
+    const adminDayEditor = document.getElementById('admin-day-editor');
+    const adminWeekEditor = document.getElementById('admin-week-editor');
+    const adminDaySelect = document.getElementById('admin-day-select');
+    const adminDayText = document.getElementById('admin-day-text');
+    const adminDaySave = document.getElementById('admin-day-save');
+    const adminDayCancel = document.getElementById('admin-day-cancel');
     const adminWeekText = document.getElementById('admin-week-text');
-    const adminSave = document.getElementById('admin-save');
+    const adminWeekSave = document.getElementById('admin-week-save');
+    const adminWeekCancel = document.getElementById('admin-week-cancel');
+
+    const tabBtnSchedule = document.getElementById('tab-btn-schedule');
+    const tabBtnSub = document.getElementById('tab-btn-sub');
+    const tabBtnAdmin = document.getElementById('tab-btn-admin');
+    const scheduleCard = document.getElementById('schedule-card');
+    const subCard = document.getElementById('sub-card');
 
     function setStatus(text, isError) {
       statusEl.textContent = text || '';
       statusEl.style.color = isError ? '#d33' : 'var(--tg-theme-hint-color, #888)';
+    }
+
+    function setTab(tab) {
+      tabBtnSchedule.classList.toggle('inactive', tab !== 'schedule');
+      tabBtnSub.classList.toggle('inactive', tab !== 'sub');
+      tabBtnAdmin.classList.toggle('inactive', tab !== 'admin');
+      scheduleCard.classList.toggle('hidden', tab !== 'schedule');
+      subCard.classList.toggle('hidden', tab !== 'sub');
+      adminCard.classList.toggle('hidden', tab !== 'admin');
     }
 
     async function api(path, payload) {
@@ -2161,7 +2257,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
         subInfo.textContent = 'Подписка не настроена.';
       }
       if (data.is_admin) {
-        adminCard.style.display = 'block';
+        adminCard.classList.remove('hidden');
       }
       setStatus('Готово');
     }
@@ -2200,6 +2296,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
       setStatus('Расписание обновлено');
     }
 
+    async function saveAdminDay() {
+      const day = adminDaySelect.value;
+      const text = adminDayText.value || '';
+      setStatus('Сохранение расписания дня...');
+      await api('/api/admin/day', { day, lessons_text: text });
+      setStatus('Расписание дня обновлено');
+    }
+
     document.querySelectorAll('button[data-type]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const t = btn.getAttribute('data-type');
@@ -2208,9 +2312,38 @@ WEBAPP_HTML = """<!DOCTYPE html>
     });
     subSave.addEventListener('click', saveSubscription);
     subRemove.addEventListener('click', removeSubscription);
-    adminSave.addEventListener('click', saveAdminWeek);
 
-    loadMe().then(() => loadSchedule('today')).catch(() => {});
+    tabBtnSchedule.addEventListener('click', () => setTab('schedule'));
+    tabBtnSub.addEventListener('click', () => setTab('sub'));
+    tabBtnAdmin.addEventListener('click', () => setTab('admin'));
+
+    document.getElementById('admin-mode-day').addEventListener('click', () => {
+      adminModeButtons.classList.add('hidden');
+      adminWeekEditor.classList.add('hidden');
+      adminDayEditor.classList.remove('hidden');
+    });
+    document.getElementById('admin-mode-week').addEventListener('click', () => {
+      adminModeButtons.classList.add('hidden');
+      adminDayEditor.classList.add('hidden');
+      adminWeekEditor.classList.remove('hidden');
+    });
+    adminDayCancel.addEventListener('click', () => {
+      adminDayEditor.classList.add('hidden');
+      adminModeButtons.classList.remove('hidden');
+    });
+    adminWeekCancel.addEventListener('click', () => {
+      adminWeekEditor.classList.add('hidden');
+      adminModeButtons.classList.remove('hidden');
+    });
+    adminWeekSave.addEventListener('click', saveAdminWeek);
+    adminDaySave.addEventListener('click', saveAdminDay);
+
+    loadMe()
+      .then(() => {
+        setTab('schedule');
+        return loadSchedule('today');
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>
@@ -2350,4 +2483,40 @@ async def api_admin_week(request: Request):
     ) or _format_day_table_html("Неделя", [])
     msg = _truncate_message("📢 Обновлено расписание на неделю:\n\n" + week_html)
     asyncio.create_task(_notify_subscribers(msg))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/day")
+async def api_admin_day(request: Request):
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    day = (data.get("day") or "").strip()
+    if day not in SCHEDULE_DAYS:
+        return JSONResponse({"ok": False, "error": "bad_day"}, status_code=400)
+
+    lessons_text = data.get("lessons_text", "") or ""
+    lessons = _parse_lessons_from_text(lessons_text)
+    if lessons is None:
+        return JSONResponse({"ok": False, "error": "bad_format"}, status_code=400)
+
+    schedule[day] = lessons
+    try:
+        _save_schedule_to_disk()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    msg = "📢 Обновлено расписание:\n\n" + _format_day_table_html(day, lessons)
+    asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
     return JSONResponse({"ok": True})
