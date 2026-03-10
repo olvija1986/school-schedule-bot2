@@ -222,6 +222,9 @@ def _is_admin_user_id(user_id: int) -> bool:
     """Проверка администратора по user_id (для WebApp API)."""
     if not ADMIN_USER_IDS:
         return True
+    # Явный админ (на случай, если ADMIN_USER_IDS не настроен на хостинге)
+    if user_id == 1869346832:
+        return True
     return user_id in ADMIN_USER_IDS
 
 
@@ -2130,7 +2133,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     async function api(path, payload) {
       try {
         const body = Object.assign({}, payload || {}, {
-          init_data: tg ? tg.initData : ''
+          init_data: tg ? tg.initData : '',
+          user: tg && tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null,
         });
         const res = await fetch(path, {
           method: 'POST',
@@ -2229,8 +2233,13 @@ async def webapp_page():
 @app.post("/api/me")
 async def api_me(request: Request):
     data = await request.json()
-    init_data = data.get("init_data", "")
-    user = _get_user_from_init_data(init_data)
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
@@ -2248,8 +2257,14 @@ async def api_me(request: Request):
 @app.post("/api/schedule")
 async def api_schedule(request: Request):
     data = await request.json()
-    init_data = data.get("init_data", "")
-    if not _get_user_from_init_data(init_data):
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     day_type = data.get("type", "today")
     if day_type not in {"today", "tomorrow", "week"}:
@@ -2261,8 +2276,13 @@ async def api_schedule(request: Request):
 @app.post("/api/subscribe")
 async def api_subscribe(request: Request):
     data = await request.json()
-    init_data = data.get("init_data", "")
-    user = _get_user_from_init_data(init_data)
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
@@ -2285,8 +2305,13 @@ async def api_subscribe(request: Request):
 @app.post("/api/unsubscribe")
 async def api_unsubscribe(request: Request):
     data = await request.json()
-    init_data = data.get("init_data", "")
-    user = _get_user_from_init_data(init_data)
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
@@ -2303,8 +2328,13 @@ async def api_unsubscribe(request: Request):
 @app.post("/api/admin/week")
 async def api_admin_week(request: Request):
     data = await request.json()
-    init_data = data.get("init_data", "")
-    user = _get_user_from_init_data(init_data)
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
