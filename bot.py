@@ -509,38 +509,109 @@ def _nearest_saturday_profiles() -> list[tuple[str, list[str]]]:
     return _get_saturday_profiles_for_date(sat_date)
 
 
+def _format_schedule_webapp_html(day_label: str, lessons: list[str]) -> str:
+    """Красивые HTML-карточки расписания для WebApp (вкладка Расписание)."""
+    rows_html = []
+    for idx, line in enumerate(lessons or [], start=1):
+        p = _parse_lesson_line(line)
+        subject = html.escape(p["subject"] or "—")
+        time_str = ""
+        if p["start"] and p["end"]:
+            time_str = f'{html.escape(p["start"])} – {html.escape(p["end"])}'
+        elif p["start"]:
+            time_str = html.escape(p["start"])
+        room_html = (
+            f'<span class="sc-room">{html.escape(p["room"])}</span>'
+            if p["room"] else ""
+        )
+        rows_html.append(
+            f'<div class="sc-lesson">'
+            f'<div class="sc-num">{idx}</div>'
+            f'<div class="sc-body">'
+            f'<div class="sc-subject">{subject}</div>'
+            f'<div class="sc-meta"><span class="sc-time">{time_str}</span>{room_html}</div>'
+            f'</div></div>'
+        )
+    inner = "\n".join(rows_html) if rows_html else '<div class="sc-empty">Нет занятий</div>'
+    return (
+        f'<div class="sc-day-block">'
+        f'<div class="sc-day-title">{html.escape(day_label)}</div>'
+        f'{inner}'
+        f'</div>'
+    )
+
+
+def _format_week_webapp_html(blocks_fn) -> str:
+    """Собирает HTML для недели из функции, возвращающей список (label, lessons)."""
+    parts = blocks_fn()
+    return "\n".join(
+        _format_schedule_webapp_html(label, lessons) for label, lessons in parts
+    ) if parts else _format_schedule_webapp_html("Нет занятий", [])
+
+
 def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
     """HTML‑текст расписания для различных режимов (для WebApp API)."""
     now = datetime.now(tz=_get_tz())
+
     if day_type == "week":
-        # Неделя с учётом временных замен
-        return _truncate_message(_format_week_text())
+        def _week_blocks():
+            result = []
+            now_tz = datetime.now(tz=_get_tz())
+            for day in SCHEDULE_DAYS:
+                day_idx = SCHEDULE_DAYS.index(day)
+                today_idx = now_tz.weekday()
+                target_date = (now_tz + timedelta(days=day_idx - today_idx)).date()
+                if day == "Суббота":
+                    for label, lessons in _get_saturday_profiles_for_date(target_date):
+                        if lessons:
+                            result.append((f"Суббота — {label}", lessons))
+                    continue
+                date_key = target_date.isoformat()
+                raw = temp_schedule.get(date_key)
+                data = raw if isinstance(raw, list) else schedule.get(day, [])
+                if isinstance(data, list) and data:
+                    result.append((day, data))
+            return result
+        parts = _week_blocks()
+        return "\n".join(_format_schedule_webapp_html(l, ls) for l, ls in parts) if parts else _format_schedule_webapp_html("Нет занятий", [])
+
     if day_type == "week_base":
-        # Базовое расписание на неделю (без временных замен)
-        return _truncate_message(_format_week_text_base())
+        def _week_base_blocks():
+            result = []
+            for day in SCHEDULE_DAYS:
+                if day == "Суббота":
+                    sat = schedule.get("Суббота")
+                    if isinstance(sat, dict):
+                        for pk in SATURDAY_PROFILE_KEYS:
+                            if pk in sat and sat[pk]:
+                                result.append((f"Суббота — {SATURDAY_PROFILE_LABELS.get(pk, pk)}", sat[pk]))
+                    elif isinstance(sat, list) and sat:
+                        result.append(("Суббота", sat))
+                    continue
+                data = schedule.get(day, [])
+                if isinstance(data, list) and data:
+                    result.append((day, data))
+            return result
+        parts = _week_base_blocks()
+        return "\n".join(_format_schedule_webapp_html(l, ls) for l, ls in parts) if parts else _format_schedule_webapp_html("Нет занятий", [])
+
     if day_type.startswith("sat_profile:"):
         profile_key = day_type.split("sat_profile:", 1)[1]
         now_tz = datetime.now(tz=_get_tz())
-        today_idx = now_tz.weekday()
-        delta = 5 - today_idx  # суббота
-        sat_date = (now_tz + timedelta(days=delta)).date()
+        sat_date = (now_tz + timedelta(days=5 - now_tz.weekday())).date()
         profiles = _get_saturday_profiles_for_date(sat_date)
         for label, lessons in profiles:
-            # label может быть как подписью, так и ключом; сравниваем по ключу и по метке
             if profile_key == SATURDAY_LABEL_TO_KEY.get(label, label) or profile_key == label:
-                return _truncate_message(_format_day_table_html(f"Суббота — {label}", lessons))
-        return "Нет занятий для выбранного профиля субботы."
+                return _format_schedule_webapp_html(f"Суббота — {label}", lessons)
+        return _format_schedule_webapp_html("Нет занятий для выбранного профиля", [])
+
     if day_type == "saturday":
         profiles = _nearest_saturday_profiles()
         if not profiles:
-            return _format_day_table_html("Суббота", [])
+            return _format_schedule_webapp_html("Суббота", [])
         if len(profiles) == 1 and profiles[0][0] == "Суббота":
-            return _truncate_message(_format_day_table_html("Суббота", profiles[0][1]))
-        parts = [
-            _format_day_table_html(f"Суббота — {label}", lessons)
-            for label, lessons in profiles
-        ]
-        return _truncate_message("\n\n".join(parts))
+            return _format_schedule_webapp_html("Суббота", profiles[0][1])
+        return "\n".join(_format_schedule_webapp_html(f"Суббота — {label}", lessons) for label, lessons in profiles)
 
     target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
     day_eng = target_date.strftime("%A")
@@ -550,18 +621,12 @@ def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
     if day_ru == "Суббота":
         profiles = _get_saturday_profiles_for_date(target_date)
         if profiles:
-            parts = [
-                _format_day_table_html(f"Суббота — {label}", lessons)
-                for label, lessons in profiles
-            ]
-            return _truncate_message(
-                f"📅 Расписание на {date_label} (суббота):\n\n" + "\n\n".join(parts)
-            )
-        return _format_day_table_html("Суббота", [])
+            return "\n".join(_format_schedule_webapp_html(f"Суббота — {label}", lessons) for label, lessons in profiles)
+        return _format_schedule_webapp_html("Суббота", [])
 
     day, lessons = _get_lessons_for_date(target_date)
-    header = f"📅 Расписание на {date_label} ({day}):\n\n"
-    return _truncate_message(header + _format_day_table_html(day, lessons))
+    label = f"📅 {date_label.capitalize()} — {day}"
+    return _format_schedule_webapp_html(label, lessons)
 
 def _job_id_for(user_id: int) -> str:
     return f"reminder:{user_id}"
@@ -2057,14 +2122,78 @@ WEBAPP_HTML = """<!DOCTYPE html>
     }
     #schedule-box {
       margin-top: 8px;
-      padding: 8px;
-      border-radius: 12px;
-      background: var(--tg-theme-secondary-bg-color, rgba(255,255,255,0.9));
-      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
       height: calc(100vh - 210px);
       overflow-y: auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      padding-bottom: 8px;
+    }
+    /* ── Красивое расписание ── */
+    .sc-day-block { margin-bottom: 14px; }
+    .sc-day-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0 0 6px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #4e8cff22, #8f6bff22);
+      border-left: 3px solid #7a6fff;
+      color: var(--tg-theme-text-color, #000);
+    }
+    .sc-empty {
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #888);
+      padding: 4px 10px;
+    }
+    .sc-lesson {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      margin-bottom: 5px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    }
+    .sc-num {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      background: linear-gradient(160deg, #4e8cff, #8f6bff);
+      padding: 0 6px;
+    }
+    .sc-body {
+      flex: 1;
+      padding: 7px 10px;
+      min-width: 0;
+    }
+    .sc-subject {
+      font-size: 14px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--tg-theme-text-color, #000);
+    }
+    .sc-meta {
+      display: flex;
+      gap: 8px;
+      margin-top: 2px;
       font-size: 12px;
+      color: var(--tg-theme-hint-color, #777);
+      align-items: center;
+    }
+    .sc-time { white-space: nowrap; }
+    .sc-room {
+      margin-left: auto;
+      background: rgba(127,107,255,0.12);
+      color: #7a6fff;
+      border-radius: 6px;
+      padding: 1px 7px;
+      font-weight: 600;
+      white-space: nowrap;
     }
     #status {
       font-size: 12px;
@@ -2140,22 +2269,85 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .hidden {
       display: none !important;
     }
-    /* Строки уроков — карточная вёрстка для мобильного */
-    .lesson-row {
+    /* ── Редактор уроков ── */
+    .lesson-entry {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    /* Левая полоска: [+] номер [−] */
+    .lesson-btns {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      padding: 8px 6px;
-      margin-bottom: 6px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0;
+      flex-shrink: 0;
+      width: 28px;
+      padding: 2px 0;
+    }
+    .lesson-index {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--tg-theme-hint-color, #999);
+      line-height: 1;
+      user-select: none;
+    }
+    .lesson-btn-add,
+    .lesson-btn-remove {
+      padding: 0;
+      width: 26px;
+      height: 26px;
+      min-width: 0;
+      line-height: 26px;
+      text-align: center;
+      box-shadow: none;
+      border-radius: 50%;
+      border: none;
+      color: #ffffff;
+      font-size: 16px;
+      flex-shrink: 0;
+      margin: 0;
+    }
+    .lesson-btn-add  { background: linear-gradient(135deg, #24b34b, #4edc7e); }
+    .lesson-btn-remove { background: linear-gradient(135deg, #e24545, #ff8a7a); }
+    /* Карточка урока */
+    .lesson-row {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 8px 10px;
       border-radius: 10px;
-      background: var(--tg-theme-bg-color, #fff);
-      border: 1px solid rgba(0,0,0,0.08);
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      border: 1px solid rgba(0,0,0,0.07);
       box-shadow: 0 1px 4px rgba(0,0,0,0.06);
     }
     .lesson-row-top {
       display: flex;
       align-items: center;
       gap: 6px;
+    }
+    .lesson-times {
+      display: flex;
+      gap: 6px;
+      flex: 1 1 0;
+    }
+    .lesson-times input {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 4px 6px;
+      font-size: 13px;
+      height: 32px;
+      margin-top: 0;
+      text-align: center;
+    }
+    .lesson-times-sep {
+      align-self: center;
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #aaa);
+      flex-shrink: 0;
     }
     .lesson-row-bottom {
       display: flex;
@@ -2168,52 +2360,18 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .lesson-row-bottom .lesson-room-wrap {
       flex: 0 0 72px;
     }
-    .lesson-index {
-      font-size: 13px;
-      font-weight: 600;
-      min-width: 22px;
-      color: var(--tg-theme-hint-color, #888);
-    }
-    .lesson-times {
-      display: flex;
-      gap: 4px;
-      flex: 1 1 0;
-    }
-    .lesson-times input {
-      flex: 1 1 0;
-      min-width: 0;
-      padding: 4px 6px;
-      font-size: 13px;
-      height: 32px;
-      margin-top: 0;
-      text-align: center;
-    }
     .lesson-row-bottom input {
-      padding: 4px 8px;
+      padding: 5px 8px;
       font-size: 13px;
       height: 34px;
       margin-top: 0;
     }
-    .lesson-btn-add,
-    .lesson-btn-remove {
-      padding: 0;
-      min-width: 28px;
-      width: 28px;
-      height: 28px;
-      line-height: 28px;
-      text-align: center;
-      box-shadow: none;
-      border-radius: 50%;
-      border: none;
-      color: #ffffff;
-      font-size: 16px;
-      flex-shrink: 0;
-    }
-    .lesson-btn-add {
-      background: linear-gradient(135deg, #24b34b, #4edc7e);
-    }
-    .lesson-btn-remove {
-      background: linear-gradient(135deg, #e24545, #ff8a7a);
+    /* Подписи полей внутри карточки */
+    .lesson-field-label {
+      font-size: 10px;
+      color: var(--tg-theme-hint-color, #aaa);
+      margin-bottom: 2px;
+      padding-left: 2px;
     }
     @media (max-width: 480px) {
       h1 { font-size: 18px; }
@@ -2334,7 +2492,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
 08:30-09:05 Русский язык/305
       </pre>
       <textarea id="admin-week-text" placeholder="Вставь расписание на неделю..."></textarea>
-      <div style="margin-top:8px; display:flex; gap:8px;">
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="admin-week-load" class="secondary">📥 Загрузить текущее</button>
         <button id="admin-week-save">Сохранить неделю</button>
         <button id="admin-week-cancel" class="secondary">Назад к выбору режима</button>
       </div>
@@ -2376,41 +2535,56 @@ WEBAPP_HTML = """<!DOCTYPE html>
     let adminType = 'base';
 
     function createLessonRow(data) {
-      const row = document.createElement('div');
-      row.className = 'lesson-row';
+      // Внешняя обёртка: [полоска управления] + [карточка урока]
+      const entry = document.createElement('div');
+      entry.className = 'lesson-entry';
 
-      // --- Top line: [minus] [plus] N.  [start] [end] ---
-      const topDiv = document.createElement('div');
-      topDiv.className = 'lesson-row-top';
-
-      const minusBtn = document.createElement('button');
-      minusBtn.textContent = '\u2212';
-      minusBtn.className = 'lesson-btn-remove';
-      minusBtn.addEventListener('click', () => {
-        if (adminLessonRows.children.length > 1) {
-          adminLessonRows.removeChild(row);
-          renumberLessonRows();
-        }
-      });
+      // --- Левая полоска: [+] номер [−] ---
+      const btnsDiv = document.createElement('div');
+      btnsDiv.className = 'lesson-btns';
 
       const plusBtn = document.createElement('button');
       plusBtn.textContent = '+';
       plusBtn.className = 'lesson-btn-add';
+      plusBtn.title = 'Добавить урок после';
       plusBtn.addEventListener('click', () => {
         const snapshot = {
-          start: row.querySelector('.lesson-start').value,
-          end: row.querySelector('.lesson-end').value,
+          start: entry.querySelector('.lesson-start').value,
+          end: entry.querySelector('.lesson-end').value,
           subject: '',
           room: '',
         };
-        const newRow = createLessonRow(snapshot);
-        adminLessonRows.insertBefore(newRow, row.nextSibling);
+        const newEntry = createLessonRow(snapshot);
+        adminLessonRows.insertBefore(newEntry, entry.nextSibling);
         renumberLessonRows();
       });
 
       const numLabel = document.createElement('span');
       numLabel.className = 'lesson-index';
-      numLabel.textContent = '1.';
+      numLabel.textContent = '1';
+
+      const minusBtn = document.createElement('button');
+      minusBtn.textContent = '\u2212';
+      minusBtn.className = 'lesson-btn-remove';
+      minusBtn.title = 'Удалить урок';
+      minusBtn.addEventListener('click', () => {
+        if (adminLessonRows.children.length > 1) {
+          adminLessonRows.removeChild(entry);
+          renumberLessonRows();
+        }
+      });
+
+      btnsDiv.appendChild(plusBtn);
+      btnsDiv.appendChild(numLabel);
+      btnsDiv.appendChild(minusBtn);
+
+      // --- Карточка урока ---
+      const row = document.createElement('div');
+      row.className = 'lesson-row';
+
+      // Строка 1: время начала → время конца
+      const topDiv = document.createElement('div');
+      topDiv.className = 'lesson-row-top';
 
       const timesDiv = document.createElement('div');
       timesDiv.className = 'lesson-times';
@@ -2419,38 +2593,49 @@ WEBAPP_HTML = """<!DOCTYPE html>
       startInput.type = 'time';
       startInput.className = 'lesson-start';
       startInput.value = data.start || '';
+      startInput.title = 'Начало';
+
+      const sep = document.createElement('span');
+      sep.className = 'lesson-times-sep';
+      sep.textContent = '\u2192';
 
       const endInput = document.createElement('input');
       endInput.type = 'time';
       endInput.className = 'lesson-end';
       endInput.value = data.end || '';
+      endInput.title = 'Конец';
 
       timesDiv.appendChild(startInput);
+      timesDiv.appendChild(sep);
       timesDiv.appendChild(endInput);
-
-      topDiv.appendChild(minusBtn);
-      topDiv.appendChild(plusBtn);
-      topDiv.appendChild(numLabel);
       topDiv.appendChild(timesDiv);
 
-      // --- Bottom line: [Предмет (wide)] [Каб. (narrow)] ---
+      // Строка 2: предмет + кабинет с подписями
       const bottomDiv = document.createElement('div');
       bottomDiv.className = 'lesson-row-bottom';
 
       const subjWrap = document.createElement('div');
       subjWrap.className = 'lesson-subject-wrap';
+      const subjLabel = document.createElement('div');
+      subjLabel.className = 'lesson-field-label';
+      subjLabel.textContent = '\u041f\u0440\u0435\u0434\u043c\u0435\u0442';
       const subjInput = document.createElement('input');
-      subjInput.placeholder = '\u041f\u0440\u0435\u0434\u043c\u0435\u0442';
+      subjInput.placeholder = '\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435';
       subjInput.className = 'lesson-subject';
       subjInput.value = data.subject || '';
+      subjWrap.appendChild(subjLabel);
       subjWrap.appendChild(subjInput);
 
       const roomWrap = document.createElement('div');
       roomWrap.className = 'lesson-room-wrap';
+      const roomLabel = document.createElement('div');
+      roomLabel.className = 'lesson-field-label';
+      roomLabel.textContent = '\u041a\u0430\u0431\u0438\u043d\u0435\u0442';
       const roomInput = document.createElement('input');
-      roomInput.placeholder = '\u041a\u0430\u0431.';
+      roomInput.placeholder = '\u2014';
       roomInput.className = 'lesson-room';
       roomInput.value = data.room || '';
+      roomWrap.appendChild(roomLabel);
       roomWrap.appendChild(roomInput);
 
       bottomDiv.appendChild(subjWrap);
@@ -2459,15 +2644,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
       row.appendChild(topDiv);
       row.appendChild(bottomDiv);
 
-      return row;
+      entry.appendChild(btnsDiv);
+      entry.appendChild(row);
+
+      return entry;
     }
 
     function renumberLessonRows() {
-      Array.from(adminLessonRows.children).forEach((row, idx) => {
-        const label = row.querySelector('.lesson-index');
-        if (label) {
-          label.textContent = (idx + 1) + '.';
-        }
+      Array.from(adminLessonRows.children).forEach((entry, idx) => {
+        const label = entry.querySelector('.lesson-index');
+        if (label) label.textContent = idx + 1;
       });
     }
 
@@ -2642,7 +2828,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const date = adminDayDate.value || null;
       // собираем строки занятий из фиксированных слотов
       const lines = [];
-      const rows = Array.from(adminLessonRows.querySelectorAll('.row'));
+      const rows = Array.from(adminLessonRows.querySelectorAll('.lesson-entry'));
       const parsed = [];
       rows.forEach((row) => {
         const subjInput = row.querySelector('.lesson-subject');
@@ -2738,6 +2924,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.remove('hidden');
       adminTitle.classList.remove('hidden');
       adminSubtitle.classList.remove('hidden');
+    });
+    document.getElementById('admin-week-load').addEventListener('click', async () => {
+      try {
+        setStatus('Загрузка расписания...');
+        const data = await api('/api/admin/week_get', { mode: adminType });
+        adminWeekText.value = data.week_text || '';
+        setStatus('Расписание загружено — можешь редактировать');
+      } catch (e) {
+        // ошибка уже показана внутри api()
+      }
     });
     adminWeekSave.addEventListener('click', saveAdminWeek);
     adminDaySave.addEventListener('click', saveAdminDay);
@@ -3034,3 +3230,85 @@ async def api_admin_day_get(request: Request):
             lessons = base
 
     return JSONResponse({"ok": True, "lessons": lessons})
+
+
+@app.post("/api/admin/week_get")
+async def api_admin_week_get(request: Request):
+    """Возвращает расписание недели в текстовом формате для предзаполнения формы."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    mode = (data.get("mode") or "base").strip()
+    lines: list[str] = []
+
+    now_tz = datetime.now(tz=_get_tz())
+    monday = (now_tz - timedelta(days=now_tz.weekday())).date()
+
+    for offset, day in enumerate(SCHEDULE_DAYS):
+        target_date = monday + timedelta(days=offset)
+        key = target_date.isoformat()
+
+        if day == "Суббота":
+            # Суббота — всегда по профилям
+            if mode == "temp":
+                raw = temp_schedule.get(key)
+                if isinstance(raw, dict):
+                    sat_data = raw
+                elif isinstance(raw, list):
+                    # legacy list — выводим как обычный день
+                    if raw:
+                        lines.append(f"{day}:")
+                        lines.extend(raw)
+                        lines.append("")
+                    continue
+                else:
+                    sat_data = schedule.get("Суббота")
+            else:
+                sat_data = schedule.get("Суббота")
+
+            if isinstance(sat_data, dict):
+                for pk in SATURDAY_PROFILE_KEYS:
+                    profile_lessons = sat_data.get(pk, [])
+                    if profile_lessons:
+                        label = SATURDAY_PROFILE_LABELS.get(pk, pk)
+                        lines.append(f"Суббота {label}:")
+                        lines.extend(profile_lessons)
+                        lines.append("")
+            elif isinstance(sat_data, list) and sat_data:
+                lines.append(f"{day}:")
+                lines.extend(sat_data)
+                lines.append("")
+            continue
+
+        # Обычный день
+        lessons: list[str] = []
+        if mode == "temp":
+            raw = temp_schedule.get(key)
+            if isinstance(raw, list):
+                lessons = raw
+            if not lessons:
+                base = schedule.get(day)
+                if isinstance(base, list):
+                    lessons = base
+        else:
+            base = schedule.get(day)
+            if isinstance(base, list):
+                lessons = base
+
+        if lessons:
+            lines.append(f"{day}:")
+            lines.extend(lessons)
+            lines.append("")
+
+    return JSONResponse({"ok": True, "week_text": "\n".join(lines).strip()})
