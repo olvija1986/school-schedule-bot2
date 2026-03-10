@@ -2166,9 +2166,11 @@ WEBAPP_HTML = """<!DOCTYPE html>
       <button class="sched-btn" data-type="tomorrow">Завтра</button>
       <button class="sched-btn" data-type="week">Неделя</button>
     </div>
+    <div style="margin-top:6px;">
+      <button id="btn-week-base" class="sched-btn" data-type="week_base">Основное расписание</button>
+    </div>
     <div id="schedule-saturday-row" style="margin-top:6px;">
       <button id="btn-saturday" class="sched-btn" data-type="saturday">Суббота</button>
-      <button id="btn-week-base" class="sched-btn" data-type="week_base">Основное расписание</button>
       <button id="btn-sat-prof-1" class="sched-btn" data-type="sat_profile:Физмат">Физмат</button>
       <button id="btn-sat-prof-2" class="sched-btn" data-type="sat_profile:Биохим">Биохим</button>
       <button id="btn-sat-prof-3" class="sched-btn" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
@@ -2237,60 +2239,9 @@ WEBAPP_HTML = """<!DOCTYPE html>
       </select>
       <div style="margin-top:6px;">
         <div style="font-size:12px; margin-bottom:4px; color: var(--tg-theme-hint-color, #777);">
-          Время фиксировано, заполни только предмет и кабинет:
+          Укажи время, предмет и кабинет для каждого урока:
         </div>
-        <div id="admin-lesson-rows">
-          <div class="row" data-lesson="1">
-            <div style="width:42px; font-size:12px; padding-top:8px;">1.</div>
-            <div style="width:90px; font-size:12px; padding-top:8px;">08:00–08:40</div>
-            <div>
-              <input placeholder="Предмет" class="lesson-subject" />
-            </div>
-            <div style="max-width:90px;">
-              <input placeholder="Каб." class="lesson-room" />
-            </div>
-          </div>
-          <div class="row" data-lesson="2">
-            <div style="width:42px; font-size:12px; padding-top:8px;">2.</div>
-            <div style="width:90px; font-size:12px; padding-top:8px;">08:50–09:30</div>
-            <div>
-              <input placeholder="Предмет" class="lesson-subject" />
-            </div>
-            <div style="max-width:90px;">
-              <input placeholder="Каб." class="lesson-room" />
-            </div>
-          </div>
-          <div class="row" data-lesson="3">
-            <div style="width:42px; font-size:12px; padding-top:8px;">3.</div>
-            <div style="width:90px; font-size:12px; padding-top:8px;">09:50–10:30</div>
-            <div>
-              <input placeholder="Предмет" class="lesson-subject" />
-            </div>
-            <div style="max-width:90px;">
-              <input placeholder="Каб." class="lesson-room" />
-            </div>
-          </div>
-          <div class="row" data-lesson="4">
-            <div style="width:42px; font-size:12px; padding-top:8px;">4.</div>
-            <div style="width:90px; font-size:12px; padding-top:8px;">10:50–11:30</div>
-            <div>
-              <input placeholder="Предмет" class="lesson-subject" />
-            </div>
-            <div style="max-width:90px;">
-              <input placeholder="Каб." class="lesson-room" />
-            </div>
-          </div>
-          <div class="row" data-lesson="5">
-            <div style="width:42px; font-size:12px; padding-top:8px;">5.</div>
-            <div style="width:90px; font-size:12px; padding-top:8px;">11:40–12:20</div>
-            <div>
-              <input placeholder="Предмет" class="lesson-subject" />
-            </div>
-            <div style="max-width:90px;">
-              <input placeholder="Каб." class="lesson-room" />
-            </div>
-          </div>
-        </div>
+        <div id="admin-lesson-rows"></div>
       </div>
       <div style="margin-top:8px; display:flex; gap:8px;">
         <button id="admin-day-save">Сохранить день</button>
@@ -2348,6 +2299,146 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const adminTypeTemp = document.getElementById('admin-type-temp');
 
     let adminType = 'base';
+
+    function createLessonRow(data) {
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const numDiv = document.createElement('div');
+      numDiv.style.width = '28px';
+      numDiv.style.fontSize = '12px';
+      numDiv.style.paddingTop = '8px';
+
+      const minusBtn = document.createElement('button');
+      minusBtn.textContent = '−';
+      minusBtn.className = 'secondary';
+      minusBtn.style.padding = '2px 6px';
+      minusBtn.style.minWidth = '0';
+      minusBtn.addEventListener('click', () => {
+        if (adminLessonRows.children.length > 1) {
+          adminLessonRows.removeChild(row);
+          renumberLessonRows();
+        }
+      });
+
+      const plusBtn = document.createElement('button');
+      plusBtn.textContent = '+';
+      plusBtn.className = 'secondary';
+      plusBtn.style.padding = '2px 6px';
+      plusBtn.style.minWidth = '0';
+      plusBtn.addEventListener('click', () => {
+        const cloneData = Object.assign({}, data);
+        const newRow = createLessonRow(cloneData);
+        adminLessonRows.insertBefore(newRow, row.nextSibling);
+        renumberLessonRows();
+      });
+
+      const numLabel = document.createElement('span');
+      numLabel.className = 'lesson-index';
+      numLabel.textContent = '1.';
+      numLabel.style.marginLeft = '4px';
+
+      numDiv.appendChild(minusBtn);
+      numDiv.appendChild(plusBtn);
+      numDiv.appendChild(numLabel);
+
+      const timeDiv = document.createElement('div');
+      timeDiv.style.display = 'flex';
+      timeDiv.style.gap = '4px';
+      timeDiv.style.alignItems = 'center';
+      timeDiv.style.width = '90px';
+      const startInput = document.createElement('input');
+      startInput.type = 'time';
+      startInput.className = 'lesson-start';
+      startInput.style.padding = '4px';
+      startInput.value = data.start || '';
+      const endInput = document.createElement('input');
+      endInput.type = 'time';
+      endInput.className = 'lesson-end';
+      endInput.style.padding = '4px';
+      endInput.value = data.end || '';
+      timeDiv.appendChild(startInput);
+      timeDiv.appendChild(endInput);
+
+      const subjDiv = document.createElement('div');
+      const subjInput = document.createElement('input');
+      subjInput.placeholder = 'Предмет';
+      subjInput.className = 'lesson-subject';
+      subjInput.value = data.subject || '';
+      subjDiv.appendChild(subjInput);
+
+      const roomDiv = document.createElement('div');
+      roomDiv.style.maxWidth = '80px';
+      const roomInput = document.createElement('input');
+      roomInput.placeholder = 'Каб.';
+      roomInput.className = 'lesson-room';
+      roomInput.value = data.room || '';
+      roomDiv.appendChild(roomInput);
+
+      row.appendChild(numDiv);
+      row.appendChild(timeDiv);
+      row.appendChild(subjDiv);
+      row.appendChild(roomDiv);
+
+      return row;
+    }
+
+    function renumberLessonRows() {
+      Array.from(adminLessonRows.children).forEach((row, idx) => {
+        const label = row.querySelector('.lesson-index');
+        if (label) {
+          label.textContent = (idx + 1) + '.';
+        }
+      });
+    }
+
+    function fillLessonRowsFromLines(lines) {
+      adminLessonRows.innerHTML = '';
+      if (!lines || !lines.length) {
+        const defaults = [
+          ['08:00', '08:40'],
+          ['08:50', '09:30'],
+          ['09:50', '10:30'],
+          ['10:50', '11:30'],
+          ['11:40', '12:20'],
+        ];
+        defaults.forEach((t) => {
+          const row = createLessonRow({ start: t[0], end: t[1], subject: '', room: '' });
+          adminLessonRows.appendChild(row);
+        });
+        renumberLessonRows();
+        return;
+      }
+      lines.forEach((line) => {
+        const raw = (line || '').trim();
+        if (!raw) return;
+        let start = '', end = '', subject = '', room = '';
+        const m = raw.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s+(.+)$/);
+        let rest = raw;
+        if (m) {
+          start = m[1];
+          end = m[2];
+          rest = m[3];
+        }
+        if (rest.includes('/')) {
+          const parts = rest.split('/');
+          subject = parts[0].trim();
+          room = parts.slice(1).join('/').trim();
+        } else {
+          subject = rest.trim();
+        }
+        const row = createLessonRow({ start, end, subject, room });
+        adminLessonRows.appendChild(row);
+      });
+      renumberLessonRows();
+    }
+
+    async function reloadAdminDay() {
+      const day = adminDaySelect.value;
+      const date = adminDayDate.value || null;
+      const data = await api('/api/admin/day_get', { day, mode: adminType, date });
+      fillLessonRowsFromLines(data.lessons || []);
+    }
 
     const tabBtnSchedule = document.getElementById('tab-btn-schedule');
     const tabBtnSub = document.getElementById('tab-btn-sub');
@@ -2469,26 +2560,32 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const day = adminDaySelect.value;
       const date = adminDayDate.value || null;
       // собираем строки занятий из фиксированных слотов
-      const times = [
-        ['08:00', '08:40'],
-        ['08:50', '09:30'],
-        ['09:50', '10:30'],
-        ['10:50', '11:30'],
-        ['11:40', '12:20'],
-      ];
       const lines = [];
-      Array.from(adminLessonRows.querySelectorAll('.row')).forEach((row, idx) => {
+      const rows = Array.from(adminLessonRows.querySelectorAll('.row'));
+      const parsed = [];
+      rows.forEach((row) => {
         const subjInput = row.querySelector('.lesson-subject');
         const roomInput = row.querySelector('.lesson-room');
+        const startInput = row.querySelector('.lesson-start');
+        const endInput = row.querySelector('.lesson-end');
         const subject = (subjInput.value || '').trim();
         const room = (roomInput.value || '').trim();
+        const start = (startInput && startInput.value) || '';
+        const end = (endInput && endInput.value) || '';
         if (!subject) {
           return;
         }
-        const [s, e] = times[idx] || times[0];
         const roomPart = room ? '/' + room : '';
-        lines.push(`${s}-${e} ${subject}${roomPart}`);
+        parsed.push({
+          start,
+          end,
+          line: `${start || ''}-${end || ''} ${subject}${roomPart}`.trim(),
+        });
       });
+      parsed
+        .filter((p) => p.start)
+        .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
+        .forEach((p) => lines.push(p.line));
       const text = lines.join('\\n');
       setStatus('Сохранение расписания дня...');
       await api('/api/admin/day', { day, lessons_text: text, mode: adminType, date });
@@ -2513,17 +2610,24 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminTypeBase.classList.remove('secondary');
       adminTypeTemp.classList.add('secondary');
       adminDayDateWrap.classList.add('hidden');
+      if (!adminDayEditor.classList.contains('hidden')) {
+        reloadAdminDay();
+      }
     });
     adminTypeTemp.addEventListener('click', () => {
       adminType = 'temp';
       adminTypeTemp.classList.remove('secondary');
       adminTypeBase.classList.add('secondary');
       adminDayDateWrap.classList.remove('hidden');
+      if (!adminDayEditor.classList.contains('hidden')) {
+        reloadAdminDay();
+      }
     });
     document.getElementById('admin-mode-day').addEventListener('click', () => {
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
       adminDayEditor.classList.remove('hidden');
+      reloadAdminDay();
     });
     document.getElementById('admin-mode-week').addEventListener('click', () => {
       adminModeButtons.classList.add('hidden');
@@ -2780,3 +2884,56 @@ async def api_admin_day(request: Request):
         asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
 
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/day_get")
+async def api_admin_day_get(request: Request):
+    """Возвращает список строк уроков для дня/режима (для предзаполнения формы)."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    day = (data.get("day") or "").strip()
+    if day not in SCHEDULE_DAYS:
+        return JSONResponse({"ok": False, "error": "bad_day"}, status_code=400)
+    mode = (data.get("mode") or "base").strip()
+
+    lessons: list[str] = []
+    if mode == "temp":
+        date_str = (data.get("date") or "").strip()
+        d: date | None = None
+        if date_str:
+            try:
+                d = datetime.fromisoformat(date_str).date()
+            except ValueError:
+                d = None
+        if d is None:
+            now_tz = datetime.now(tz=_get_tz())
+            today_idx = now_tz.weekday()
+            target_idx = SCHEDULE_DAYS.index(day)
+            delta = target_idx - today_idx
+            d = (now_tz + timedelta(days=delta)).date()
+        key = d.isoformat()
+        raw = temp_schedule.get(key)
+        if isinstance(raw, list):
+            lessons = raw
+        if not lessons:
+            base = schedule.get(day)
+            if isinstance(base, list):
+                lessons = base
+    else:
+        base = schedule.get(day)
+        if isinstance(base, list):
+            lessons = base
+
+    return JSONResponse({"ok": True, "lessons": lessons})
