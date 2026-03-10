@@ -2124,7 +2124,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       margin-top: 8px;
       height: calc(100vh - 210px);
       overflow-y: auto;
-      padding-bottom: 8px;
+      padding-bottom: 16px;
     }
     /* ── Красивое расписание ── */
     .sc-day-block { margin-bottom: 14px; }
@@ -2259,7 +2259,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
     }
     .sched-btn {
       min-width: 0;
-      padding-inline: 10px;
       font-size: 13px;
     }
     .sched-btn.active {
@@ -2373,6 +2372,163 @@ WEBAPP_HTML = """<!DOCTYPE html>
       margin-bottom: 2px;
       padding-left: 2px;
     }
+    /* ── Кнопки расписания ── */
+    #schedule-card {
+      padding: 0;
+      background: none;
+      box-shadow: none;
+    }
+    .sched-main-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .sched-main-btn {
+      flex: 1 1 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+      padding: 12px 4px;
+      border-radius: 14px;
+      background: linear-gradient(145deg, #4e8cff, #8f6bff);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 3px 10px rgba(100,80,255,0.22);
+      border: none;
+      cursor: pointer;
+      transition: transform 0.08s, box-shadow 0.08s;
+      margin: 0;
+    }
+    .sched-main-btn:active {
+      transform: scale(0.96);
+      box-shadow: 0 1px 4px rgba(100,80,255,0.18);
+    }
+    .sched-main-btn.active {
+      background: linear-gradient(145deg, #3a76f0, #7a52f0);
+      box-shadow: 0 4px 14px rgba(100,80,255,0.35);
+    }
+    .sched-btn-icon { font-size: 20px; line-height: 1; }
+    .sched-btn-label { font-size: 12px; }
+    .sched-chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .sched-chip {
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+      color: var(--tg-theme-hint-color, #555);
+      border: 1px solid rgba(0,0,0,0.07);
+      box-shadow: none;
+      margin: 0;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .sched-chip.active {
+      background: linear-gradient(135deg, #4e8cff, #8f6bff);
+      color: #fff;
+      border-color: transparent;
+      box-shadow: 0 2px 8px rgba(100,80,255,0.25);
+    }
+    /* ── Подписка ── */
+    #sub-card { padding: 12px; }
+    .sub-status-block {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(78,140,255,0.10), rgba(143,107,255,0.10));
+      border: 1px solid rgba(122,111,255,0.18);
+      margin-bottom: 16px;
+    }
+    .sub-status-left {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4e8cff22, #8f6bff33);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .sub-status-icon { font-size: 22px; }
+    .sub-status-right { flex: 1; min-width: 0; }
+    .sub-status-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--tg-theme-text-color, #000);
+      margin-bottom: 2px;
+    }
+    .sub-status-text {
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, #777);
+      line-height: 1.4;
+    }
+    .sub-settings {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .sub-field {
+      flex: 1 1 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .sub-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, #888);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding-left: 3px;
+    }
+    .sub-input {
+      width: 100%;
+      box-sizing: border-box;
+      height: 44px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1.5px solid rgba(0,0,0,0.10);
+      font-size: 15px;
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      color: var(--tg-theme-text-color, #000);
+      margin: 0;
+    }
+    .sub-actions { display: flex; gap: 8px; }
+    .sub-btn-save {
+      flex: 1;
+      padding: 13px;
+      font-size: 14px;
+      font-weight: 700;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #4e8cff, #8f6bff);
+      color: #fff;
+      border: none;
+      box-shadow: 0 3px 10px rgba(100,80,255,0.25);
+      cursor: pointer;
+      margin: 0;
+    }
+    .sub-btn-remove {
+      flex: 0 0 auto;
+      padding: 13px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 14px;
+      background: rgba(220,50,50,0.07);
+      color: #c0392b;
+      border: 1.5px solid rgba(220,50,50,0.18);
+      box-shadow: none;
+      cursor: pointer;
+      margin: 0;
+    }
     /* ── Fullscreen редакторы ── */
     .admin-fullscreen {
       display: flex;
@@ -2459,46 +2615,65 @@ WEBAPP_HTML = """<!DOCTYPE html>
     <button id="tab-btn-admin" class="tab-btn inactive">Админка</button>
   </div>
 
-  <div class="card" id="schedule-card">
-    <h2>Расписание</h2>
-    <div>
-      <button class="sched-btn" data-type="today">Сегодня</button>
-      <button class="sched-btn" data-type="tomorrow">Завтра</button>
-      <button class="sched-btn" data-type="week">Неделя</button>
+  <div id="schedule-card">
+    <!-- Три главных кнопки -->
+    <div class="sched-main-row">
+      <button class="sched-main-btn" data-type="today">
+        <span class="sched-btn-icon">📅</span>
+        <span class="sched-btn-label">Сегодня</span>
+      </button>
+      <button class="sched-main-btn" data-type="tomorrow">
+        <span class="sched-btn-icon">🌅</span>
+        <span class="sched-btn-label">Завтра</span>
+      </button>
+      <button class="sched-main-btn" data-type="week">
+        <span class="sched-btn-icon">📆</span>
+        <span class="sched-btn-label">Неделя</span>
+      </button>
     </div>
-    <div style="margin-top:6px;">
-      <button id="btn-week-base" class="sched-btn" data-type="week_base">Основное расписание</button>
+    <!-- Дополнительные чипсы -->
+    <div class="sched-chips-row">
+      <button id="btn-week-base" class="sched-chip" data-type="week_base">Основное</button>
     </div>
-    <div id="schedule-saturday-row" style="margin-top:6px;">
-      <button id="btn-saturday" class="sched-btn" data-type="saturday">Суббота</button>
-      <button id="btn-sat-prof-1" class="sched-btn" data-type="sat_profile:Физмат">Физмат</button>
-      <button id="btn-sat-prof-2" class="sched-btn" data-type="sat_profile:Биохим">Биохим</button>
-      <button id="btn-sat-prof-3" class="sched-btn" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
-      <button id="btn-sat-prof-4" class="sched-btn" data-type="sat_profile:Инфотех_2">Инфотех 2</button>
-      <button id="btn-sat-prof-5" class="sched-btn" data-type="sat_profile:Общеобразовательный_3">Общеобр. 3</button>
+    <div id="schedule-saturday-row" class="sched-chips-row">
+      <button id="btn-saturday"   class="sched-chip" data-type="saturday">Суббота</button>
+      <button id="btn-sat-prof-1" class="sched-chip" data-type="sat_profile:Физмат">Физмат</button>
+      <button id="btn-sat-prof-2" class="sched-chip" data-type="sat_profile:Биохим">Биохим</button>
+      <button id="btn-sat-prof-3" class="sched-chip" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
+      <button id="btn-sat-prof-4" class="sched-chip" data-type="sat_profile:Инфотех_2">Инфотех 2</button>
+      <button id="btn-sat-prof-5" class="sched-chip" data-type="sat_profile:Общеобразовательный_3">Общеобр. 3</button>
     </div>
     <div id="schedule-box"></div>
   </div>
 
-  <div class="card" id="sub-card">
-    <h2>Подписка</h2>
-    <div id="sub-info"></div>
-    <div class="row">
-      <div>
-        <label>Время (HH:MM)</label>
-        <input id="sub-time" type="time" />
+  <div class="card hidden" id="sub-card">
+    <!-- Статус подписки -->
+    <div id="sub-status-block" class="sub-status-block">
+      <div class="sub-status-left">
+        <span id="sub-status-icon" class="sub-status-icon">🔕</span>
       </div>
-      <div>
-        <label>День</label>
-        <select id="sub-day-type">
+      <div class="sub-status-right">
+        <div class="sub-status-title">Уведомления о расписании</div>
+        <div id="sub-info" class="sub-status-text">Загрузка...</div>
+      </div>
+    </div>
+    <!-- Настройки -->
+    <div class="sub-settings">
+      <div class="sub-field">
+        <label class="sub-label">Время отправки</label>
+        <input id="sub-time" type="time" class="sub-input" />
+      </div>
+      <div class="sub-field">
+        <label class="sub-label">Расписание на</label>
+        <select id="sub-day-type" class="sub-input">
           <option value="today">Сегодня</option>
           <option value="tomorrow">Завтра</option>
         </select>
       </div>
     </div>
-    <div style="margin-top:8px; display:flex; gap:8px;">
-      <button id="sub-save">Сохранить</button>
-      <button id="sub-remove" class="secondary">Отключить</button>
+    <div class="sub-actions">
+      <button id="sub-save" class="sub-btn-save">🔔 Сохранить</button>
+      <button id="sub-remove" class="sub-btn-remove">Отключить</button>
     </div>
   </div>
 
@@ -2808,17 +2983,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
     async function loadMe() {
       setStatus('Загрузка данных пользователя...');
       const data = await api('/api/me', {});
+      const subIcon = document.getElementById('sub-status-icon');
       if (data.subscription) {
-        subInfo.textContent =
-          'Подписка: ' +
-          data.subscription.time +
-          ' (' +
-          (data.subscription.day_type === 'tomorrow' ? 'завтра' : 'сегодня') +
-          ')';
+        const dayLabel = data.subscription.day_type === 'tomorrow' ? 'завтра' : 'сегодня';
+        subInfo.textContent = 'Уведомление каждый день в ' + data.subscription.time + ' — расписание на ' + dayLabel;
+        if (subIcon) subIcon.textContent = '🔔';
         subTime.value = data.subscription.time;
         subDayType.value = data.subscription.day_type || 'today';
       } else {
-        subInfo.textContent = 'Подписка не настроена.';
+        subInfo.textContent = 'Подписка не настроена. Выбери время и нажми «Сохранить».';
+        if (subIcon) subIcon.textContent = '🔕';
       }
       isAdmin = !!data.is_admin;
       // управление видимостью кнопок субботы
