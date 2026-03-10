@@ -1157,6 +1157,18 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Готово. Напоминания отключены.")
 
 
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /chatid — отвечает ID текущего чата (удобно для добавления группы в подписку)."""
+    if not update.message or not update.effective_chat:
+        return
+    chat = update.effective_chat
+    chat_type = {"private": "личный", "group": "группа", "supergroup": "супергруппа", "channel": "канал"}.get(chat.type, chat.type)
+    await update.message.reply_text(
+        f"Chat ID этого чата:\n<code>{chat.id}</code>\n\nТип: {chat_type}",
+        parse_mode="HTML",
+    )
+
+
 async def open_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /app — кнопка для открытия мини‑приложения."""
     if not update.message:
@@ -1979,6 +1991,7 @@ bot_app.add_handler(CommandHandler("help", help_command))
 bot_app.add_handler(CommandHandler("app", open_app))
 bot_app.add_handler(CommandHandler("subscribe", subscribe))
 bot_app.add_handler(CommandHandler("unsubscribe", unsubscribe))
+bot_app.add_handler(CommandHandler("chatid", chatid_command))
 bot_app.add_handler(CallbackQueryHandler(subscribe_time_callback, pattern=r"^subtime:"))
 bot_app.add_handler(CallbackQueryHandler(subscribe_callback, pattern=r"^subscribe:"))
 
@@ -2030,6 +2043,7 @@ async def startup_event():
             BotCommand("edit_schedule", "Редактировать расписание"),
             BotCommand("subscribe", "Ежедневное напоминание (HH:MM)"),
             BotCommand("unsubscribe", "Отключить напоминания"),
+            BotCommand("chatid", "Узнать ID текущего чата"),
             BotCommand("cancel", "Отменить редактирование"),
         ]
     )
@@ -2598,6 +2612,73 @@ WEBAPP_HTML = """<!DOCTYPE html>
       background: var(--tg-theme-secondary-bg-color, #f5f5f5);
       flex-shrink: 0;
     }
+    /* ── Групповые подписки ── */
+    .sub-section-divider {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--tg-theme-hint-color, #888);
+      margin: 16px 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sub-section-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(0,0,0,0.08);
+    }
+    .sub-group-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .sub-group-empty {
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #888);
+      padding: 4px 2px;
+    }
+    .sub-group-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      border: 1px solid rgba(0,0,0,0.06);
+    }
+    .sub-group-item-info { flex: 1; min-width: 0; }
+    .sub-group-item-id {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--tg-theme-hint-color, #888);
+      margin-bottom: 1px;
+      font-family: ui-monospace, monospace;
+    }
+    .sub-group-item-time { font-size: 13px; font-weight: 500; }
+    .sub-group-item-del {
+      padding: 5px 11px;
+      font-size: 12px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #e24545, #ff8a7a);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      box-shadow: none;
+      min-width: 0;
+      flex-shrink: 0;
+      margin: 0;
+    }
+    .sub-group-form { display: flex; flex-direction: column; gap: 8px; }
+    .sub-group-inputs {
+      display: flex;
+      gap: 8px;
+    }
+    .sub-group-inputs .sub-field:first-child { flex: 2 1 0; }
+    .sub-group-inputs .sub-field { flex: 1 1 0; min-width: 0; }
     @media (max-width: 480px) {
       h1 { font-size: 18px; }
       h2 { font-size: 14px; }
@@ -2674,6 +2755,34 @@ WEBAPP_HTML = """<!DOCTYPE html>
     <div class="sub-actions">
       <button id="sub-save" class="sub-btn-save">🔔 Сохранить</button>
       <button id="sub-remove" class="sub-btn-remove">Отключить</button>
+    </div>
+
+    <!-- Групповые подписки — только для админов -->
+    <div id="sub-group-section" class="hidden">
+      <div class="sub-section-divider">Групповые чаты</div>
+      <div id="sub-group-list" class="sub-group-list">
+        <div class="sub-group-empty">Загрузка...</div>
+      </div>
+      <div class="sub-group-form">
+        <div class="sub-group-inputs">
+          <div class="sub-field">
+            <label class="sub-label">Chat ID группы</label>
+            <input id="sub-group-chatid" type="text" class="sub-input" placeholder="-100123456789" />
+          </div>
+          <div class="sub-field">
+            <label class="sub-label">Время</label>
+            <input id="sub-group-time" type="time" class="sub-input" />
+          </div>
+          <div class="sub-field">
+            <label class="sub-label">На</label>
+            <select id="sub-group-daytype" class="sub-input">
+              <option value="today">Сегодня</option>
+              <option value="tomorrow">Завтра</option>
+            </select>
+          </div>
+        </div>
+        <button id="sub-group-save" style="width:100%;">➕ Добавить подписку для группы</button>
+      </div>
     </div>
   </div>
 
@@ -3009,6 +3118,9 @@ WEBAPP_HTML = """<!DOCTYPE html>
         scheduleSaturdayRow.style.display = 'flex';
       }
       setStatus('Готово');
+      if (isAdmin) {
+        await loadGroupSubscriptions();
+      }
     }
 
     async function loadSchedule(type) {
@@ -3093,6 +3205,61 @@ WEBAPP_HTML = """<!DOCTYPE html>
     });
     subSave.addEventListener('click', saveSubscription);
     subRemove.addEventListener('click', removeSubscription);
+
+    // ── Групповые подписки (только для админов) ──
+    async function loadGroupSubscriptions() {
+      const section = document.getElementById('sub-group-section');
+      if (!section) return;
+      section.classList.remove('hidden');
+      const list = document.getElementById('sub-group-list');
+      list.innerHTML = '<div class="sub-group-empty">Загрузка...</div>';
+      try {
+        const data = await api('/api/admin/subscriptions_list', {});
+        list.innerHTML = '';
+        if (!data.subscriptions || !data.subscriptions.length) {
+          list.innerHTML = '<div class="sub-group-empty">Нет активных групповых подписок</div>';
+          return;
+        }
+        data.subscriptions.forEach(sub => {
+          const dayLabel = sub.day_type === 'tomorrow' ? 'завтра' : 'сегодня';
+          const item = document.createElement('div');
+          item.className = 'sub-group-item';
+          item.innerHTML =
+            '<div class="sub-group-item-info">' +
+              '<div class="sub-group-item-id">ID: ' + sub.chat_id + '</div>' +
+              '<div class="sub-group-item-time">\u23f0 ' + sub.time + ' \u00b7 ' + dayLabel + '</div>' +
+            '</div>' +
+            '<button class="sub-group-item-del">\u2715</button>';
+          item.querySelector('.sub-group-item-del').addEventListener('click', async () => {
+            try {
+              await api('/api/admin/unsubscribe_chat', { chat_id: sub.chat_id });
+              await loadGroupSubscriptions();
+            } catch(e) {}
+          });
+          list.appendChild(item);
+        });
+      } catch(e) {
+        list.innerHTML = '<div class="sub-group-empty">Ошибка загрузки</div>';
+      }
+    }
+
+    document.getElementById('sub-group-save').addEventListener('click', async () => {
+      const chatIdInput = document.getElementById('sub-group-chatid');
+      const timeInput   = document.getElementById('sub-group-time');
+      const dayTypeInput = document.getElementById('sub-group-daytype');
+      const chatId = (chatIdInput.value || '').trim();
+      const time   = timeInput.value;
+      const dayType = dayTypeInput.value;
+      if (!chatId) { setStatus('Укажи Chat ID группы', true); return; }
+      if (!time)   { setStatus('Укажи время', true); return; }
+      if (!/^-?\d+$/.test(chatId)) { setStatus('Chat ID должен быть числом, например -100123456789', true); return; }
+      try {
+        await api('/api/admin/subscribe_chat', { chat_id: chatId, time, day_type: dayType });
+        chatIdInput.value = '';
+        setStatus('Подписка для группы добавлена');
+        await loadGroupSubscriptions();
+      } catch(e) {}
+    });
 
     tabBtnSchedule.addEventListener('click', () => setTab('schedule'));
     tabBtnSub.addEventListener('click', () => setTab('sub'));
@@ -3536,3 +3703,104 @@ async def api_admin_week_get(request: Request):
             lines.append("")
 
     return JSONResponse({"ok": True, "week_text": "\n".join(lines).strip()})
+
+
+@app.post("/api/admin/subscribe_chat")
+async def api_admin_subscribe_chat(request: Request):
+    """Добавляет или обновляет подписку для группового чата."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    chat_id_raw = str(data.get("chat_id") or "").strip()
+    if not chat_id_raw or not re.match(r"^-?\d+$", chat_id_raw):
+        return JSONResponse({"ok": False, "error": "bad_chat_id"}, status_code=400)
+    chat_id = int(chat_id_raw)
+
+    time_str = data.get("time", "")
+    parsed = _parse_hhmm(time_str)
+    if not parsed:
+        return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
+    hh, mm = parsed
+    t = f"{hh:02d}:{mm:02d}"
+
+    day_type = data.get("day_type", "today")
+    if day_type not in {"today", "tomorrow"}:
+        day_type = "today"
+
+    sub_key = str(chat_id)
+    subscriptions[sub_key] = {"chat_id": chat_id, "time": t, "day_type": day_type}
+    _save_subscriptions_to_disk()
+    _reschedule_user(chat_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/subscriptions_list")
+async def api_admin_subscriptions_list(request: Request):
+    """Возвращает список всех подписок кроме личной подписки текущего пользователя."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    result = []
+    for key, entry in subscriptions.items():
+        cid = entry.get("chat_id")
+        if cid is not None and int(cid) != user_id:
+            result.append({
+                "chat_id": cid,
+                "time": entry.get("time", ""),
+                "day_type": entry.get("day_type", "today"),
+            })
+    return JSONResponse({"ok": True, "subscriptions": result})
+
+
+@app.post("/api/admin/unsubscribe_chat")
+async def api_admin_unsubscribe_chat(request: Request):
+    """Удаляет подписку для группового чата."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        init_data = data.get("init_data", "")
+        user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    chat_id_raw = str(data.get("chat_id") or "").strip()
+    if not chat_id_raw or not re.match(r"^-?\d+$", chat_id_raw):
+        return JSONResponse({"ok": False, "error": "bad_chat_id"}, status_code=400)
+    chat_id = int(chat_id_raw)
+
+    subscriptions.pop(str(chat_id), None)
+    _save_subscriptions_to_disk()
+    if scheduler is not None:
+        try:
+            scheduler.remove_job(_job_id_for(chat_id))
+        except Exception:
+            pass
+    return JSONResponse({"ok": True})
