@@ -482,11 +482,34 @@ async def _send_daily_reminder(chat_id: int, day_type: str = "today"):
     await bot_app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
 
 
+def _format_week_text_base() -> str:
+    """Текст основного расписания на неделю (Пн–Вс) без временных замен."""
+    blocks: list[str] = []
+    for day in SCHEDULE_DAYS:
+        if day == "Суббота":
+            sat = schedule.get("Суббота")
+            if isinstance(sat, dict):
+                for pk in SATURDAY_PROFILE_KEYS:
+                    if pk in sat and sat[pk]:
+                        label = SATURDAY_PROFILE_LABELS.get(pk, pk)
+                        blocks.append(_format_day_table_html(f"Суббота — {label}", sat[pk]))
+            elif isinstance(sat, list) and sat:
+                blocks.append(_format_day_table_html("Суббота", sat))
+            continue
+
+        data = schedule.get(day, [])
+        if isinstance(data, list) and data:
+            blocks.append(_format_day_table_html(day, data))
+
+    return "\n\n".join(blocks) if blocks else _format_day_table_html("Неделя", [])
+
+
 def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
     """HTML‑текст расписания для today/tomorrow/week (для WebApp API)."""
     now = datetime.now(tz=_get_tz())
     if day_type == "week":
-        return _truncate_message(_format_week_text_without_saturday())
+        # Вкладка «Расписание» в Mini App показывает основное расписание на всю неделю
+        return _truncate_message(_format_week_text_base())
 
     target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
     day_eng = target_date.strftime("%A")
@@ -2135,8 +2158,21 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
     <div id="admin-day-editor" class="hidden">
       <p style="font-size:12px; margin:8px 0 4px;">
-        Выбери день и укажи занятия (по одной строке на урок).
+        Выбери тип, день и укажи занятия (по одной строке на урок).
       </p>
+      <div class="row">
+        <div>
+          <label>Тип</label>
+          <select id="admin-day-mode">
+            <option value="base">Основное расписание</option>
+            <option value="temp">Временное на дату</option>
+          </select>
+        </div>
+        <div id="admin-day-date-wrap" class="">
+          <label>Дата (для временного)</label>
+          <input id="admin-day-date" type="date" />
+        </div>
+      </div>
       <select id="admin-day-select">
         <option value="Понедельник">Понедельник</option>
         <option value="Вторник">Вторник</option>
@@ -2197,6 +2233,9 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const adminWeekText = document.getElementById('admin-week-text');
     const adminWeekSave = document.getElementById('admin-week-save');
     const adminWeekCancel = document.getElementById('admin-week-cancel');
+    const adminDayMode = document.getElementById('admin-day-mode');
+    const adminDayDate = document.getElementById('admin-day-date');
+    const adminDayDateWrap = document.getElementById('admin-day-date-wrap');
 
     const tabBtnSchedule = document.getElementById('tab-btn-schedule');
     const tabBtnSub = document.getElementById('tab-btn-sub');
@@ -2299,8 +2338,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
     async function saveAdminDay() {
       const day = adminDaySelect.value;
       const text = adminDayText.value || '';
+      const mode = adminDayMode.value || 'base';
+      const date = adminDayDate.value || null;
+      if (mode === 'temp' && !date) {
+        setStatus('Укажи дату для временного расписания', true);
+        return;
+      }
       setStatus('Сохранение расписания дня...');
-      await api('/api/admin/day', { day, lessons_text: text });
+      await api('/api/admin/day', { day, lessons_text: text, mode, date });
       setStatus('Расписание дня обновлено');
     }
 
@@ -2326,6 +2371,14 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminDayEditor.classList.add('hidden');
       adminWeekEditor.classList.remove('hidden');
+    });
+    adminDayMode.addEventListener('change', () => {
+      const mode = adminDayMode.value;
+      if (mode === 'temp') {
+        adminDayDateWrap.classList.remove('hidden');
+      } else {
+        adminDayDateWrap.classList.add('hidden');
+      }
     });
     adminDayCancel.addEventListener('click', () => {
       adminDayEditor.classList.add('hidden');
@@ -2506,17 +2559,36 @@ async def api_admin_day(request: Request):
     if day not in SCHEDULE_DAYS:
         return JSONResponse({"ok": False, "error": "bad_day"}, status_code=400)
 
+    mode = (data.get("mode") or "base").strip()
     lessons_text = data.get("lessons_text", "") or ""
     lessons = _parse_lessons_from_text(lessons_text)
     if lessons is None:
         return JSONResponse({"ok": False, "error": "bad_format"}, status_code=400)
 
-    schedule[day] = lessons
-    try:
-        _save_schedule_to_disk()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    if mode == "temp":
+        date_str = (data.get("date") or "").strip()
+        if not date_str:
+            return JSONResponse({"ok": False, "error": "no_date"}, status_code=400)
+        try:
+            d = datetime.fromisoformat(date_str).date()
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "bad_date"}, status_code=400)
+        key = d.isoformat()
+        temp_schedule[key] = lessons
+        try:
+            _save_temp_schedule_to_disk()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        label = f"{d.strftime('%d.%m.%Y')} ({DAY_MAP.get(d.strftime('%A'), d.strftime('%A'))})"
+        msg = "📢 Временное расписание обновлено:\n\n" + _format_day_table_html(label, lessons)
+        asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
+    else:
+        schedule[day] = lessons
+        try:
+            _save_schedule_to_disk()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        msg = "📢 Обновлено расписание:\n\n" + _format_day_table_html(day, lessons)
+        asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
 
-    msg = "📢 Обновлено расписание:\n\n" + _format_day_table_html(day, lessons)
-    asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
     return JSONResponse({"ok": True})
