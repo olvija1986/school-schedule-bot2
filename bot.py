@@ -1044,17 +1044,9 @@ async def open_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     _log_user(update, "open_app")
     url = f"{BOT_URL.rstrip('/')}/webapp"
-    keyboard = ReplyKeyboardMarkup(
-        [
-            [
-                KeyboardButton(
-                    text="Открыть расписание",
-                    web_app=WebAppInfo(url=url),
-                )
-            ]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
+    # Inline‑кнопка: не занимает место внизу чата и не "прилипает"
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Открыть расписание", web_app=WebAppInfo(url=url))]]
     )
     await update.message.reply_text(
         "Нажми кнопку, чтобы открыть мини‑приложение с расписанием.",
