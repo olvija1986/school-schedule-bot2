@@ -505,11 +505,41 @@ def _format_week_text_base() -> str:
 
 
 def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
-    """HTML‑текст расписания для today/tomorrow/week (для WebApp API)."""
+    """HTML‑текст расписания для различных режимов (для WebApp API)."""
     now = datetime.now(tz=_get_tz())
     if day_type == "week":
-        # Вкладка «Расписание» в Mini App показывает основное расписание на всю неделю
+        # Базовое расписание на неделю (без временных замен)
         return _truncate_message(_format_week_text_base())
+    if day_type == "week_temp":
+        # Основное расписание с учётом временных замен
+        return _truncate_message(_format_week_text())
+    if day_type.startswith("sat_profile:"):
+        profile_key = day_type.split("sat_profile:", 1)[1]
+        now_tz = datetime.now(tz=_get_tz())
+        today_idx = now_tz.weekday()
+        delta = 5 - today_idx  # суббота
+        sat_date = (now_tz + timedelta(days=delta)).date()
+        profiles = _get_saturday_profiles_for_date(sat_date)
+        for label, lessons in profiles:
+            # label может быть как подписью, так и ключом; сравниваем по ключу и по метке
+            if profile_key == SATURDAY_LABEL_TO_KEY.get(label, label) or profile_key == label:
+                return _truncate_message(_format_day_table_html(f"Суббота — {label}", lessons))
+        return "Нет занятий для выбранного профиля субботы."
+    if day_type == "saturday":
+        now_tz = datetime.now(tz=_get_tz())
+        today_idx = now_tz.weekday()
+        delta = 5 - today_idx
+        sat_date = (now_tz + timedelta(days=delta)).date()
+        profiles = _get_saturday_profiles_for_date(sat_date)
+        if not profiles:
+            return _format_day_table_html("Суббота", [])
+        if len(profiles) == 1 and profiles[0][0] == "Суббота":
+            return _truncate_message(_format_day_table_html("Суббота", profiles[0][1]))
+        parts = [
+            _format_day_table_html(f"Суббота — {label}", lessons)
+            for label, lessons in profiles
+        ]
+        return _truncate_message("\n\n".join(parts))
 
     target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
     day_eng = target_date.strftime("%A")
@@ -1986,7 +2016,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       margin: 0;
       padding: 12px;
-      background: var(--tg-theme-bg-color, #ffffff);
+      background: radial-gradient(circle at top left, #f6f4ff, #fdfdfd);
       color: var(--tg-theme-text-color, #000000);
     }
     h1 {
@@ -2027,10 +2057,11 @@ WEBAPP_HTML = """<!DOCTYPE html>
     #schedule-box {
       margin-top: 8px;
       padding: 8px;
-      border-radius: 8px;
-      background: rgba(0,0,0,0.03);
-      max-height: 320px;
-      overflow: auto;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.9);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      height: calc(100vh - 210px);
+      overflow-y: auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       font-size: 12px;
     }
@@ -2071,7 +2102,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
     .card {
       padding: 8px;
       border-radius: 10px;
-      background: rgba(0,0,0,0.02);
+      background: rgba(255,255,255,0.85);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.04);
       margin-top: 8px;
     }
     .badge {
@@ -2098,6 +2130,15 @@ WEBAPP_HTML = """<!DOCTYPE html>
       color: var(--tg-theme-hint-color, #555);
       box-shadow: none;
     }
+    .sched-btn {
+      min-width: 0;
+      padding-inline: 10px;
+      font-size: 13px;
+    }
+    .sched-btn.active {
+      filter: brightness(1.05);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.18);
+    }
     .hidden {
       display: none !important;
     }
@@ -2116,9 +2157,18 @@ WEBAPP_HTML = """<!DOCTYPE html>
   <div class="card" id="schedule-card">
     <h2>Расписание</h2>
     <div>
-      <button data-type="today">Сегодня</button>
-      <button data-type="tomorrow">Завтра</button>
-      <button data-type="week">Неделя (Пн–Пт)</button>
+      <button class="sched-btn" data-type="today">Сегодня</button>
+      <button class="sched-btn" data-type="tomorrow">Завтра</button>
+      <button class="sched-btn" data-type="week">Неделя (Пн–Пт, базовая)</button>
+      <button class="sched-btn" data-type="week_temp">Основное расписание</button>
+    </div>
+    <div style="margin-top:6px;">
+      <button class="sched-btn" data-type="saturday">Суббота</button>
+      <button class="sched-btn" data-type="sat_profile:Физмат">Физмат</button>
+      <button class="sched-btn" data-type="sat_profile:Биохим">Биохим</button>
+      <button class="sched-btn" data-type="sat_profile:Инфотех_1">Инфотех 1</button>
+      <button class="sched-btn" data-type="sat_profile:Инфотех_2">Инфотех 2</button>
+      <button class="sched-btn" data-type="sat_profile:Общеобразовательный_3">Общеобр. 3</button>
     </div>
     <div id="schedule-box"></div>
   </div>
@@ -2147,29 +2197,27 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
   <div class="card hidden" id="admin-card">
     <h2>Админ‑панель</h2>
-    <div><span class="badge">Только для админов</span></div>
     <p style="font-size:12px; margin-top:4px;">
       Выбери режим редактирования:
     </p>
     <div id="admin-mode-buttons" style="margin-top:4px;">
-      <button id="admin-mode-day">День</button>
-      <button id="admin-mode-week" class="secondary">Вся неделя</button>
+      <div class="row">
+        <button id="admin-type-base">Основное</button>
+        <button id="admin-type-temp" class="secondary">Временное</button>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <button id="admin-mode-day">День</button>
+        <button id="admin-mode-week" class="secondary">Вся неделя</button>
+      </div>
     </div>
 
     <div id="admin-day-editor" class="hidden">
       <p style="font-size:12px; margin:8px 0 4px;">
-        Выбери тип, день и укажи занятия (по одной строке на урок).
+        Выбери день и укажи предметы и кабинеты.
       </p>
-      <div class="row">
-        <div>
-          <label>Тип</label>
-          <select id="admin-day-mode">
-            <option value="base">Основное расписание</option>
-            <option value="temp">Временное на дату</option>
-          </select>
-        </div>
-        <div id="admin-day-date-wrap" class="">
-          <label>Дата (для временного)</label>
+      <div class="row" id="admin-day-date-wrap">
+        <div style="flex:1;">
+          <label>Дата (для временного режима)</label>
           <input id="admin-day-date" type="date" />
         </div>
       </div>
@@ -2182,7 +2230,63 @@ WEBAPP_HTML = """<!DOCTYPE html>
         <option value="Суббота">Суббота</option>
         <option value="Воскресенье">Воскресенье</option>
       </select>
-      <textarea id="admin-day-text" placeholder="13:30-14:10 Математика/211&#10;14:20-15:00 Информатика/304"></textarea>
+      <div style="margin-top:6px;">
+        <div style="font-size:12px; margin-bottom:4px; color: var(--tg-theme-hint-color, #777);">
+          Время фиксировано, заполни только предмет и кабинет:
+        </div>
+        <div id="admin-lesson-rows">
+          <div class="row" data-lesson="1">
+            <div style="width:42px; font-size:12px; padding-top:8px;">1.</div>
+            <div style="width:90px; font-size:12px; padding-top:8px;">08:00–08:40</div>
+            <div>
+              <input placeholder="Предмет" class="lesson-subject" />
+            </div>
+            <div style="max-width:90px;">
+              <input placeholder="Каб." class="lesson-room" />
+            </div>
+          </div>
+          <div class="row" data-lesson="2">
+            <div style="width:42px; font-size:12px; padding-top:8px;">2.</div>
+            <div style="width:90px; font-size:12px; padding-top:8px;">08:50–09:30</div>
+            <div>
+              <input placeholder="Предмет" class="lesson-subject" />
+            </div>
+            <div style="max-width:90px;">
+              <input placeholder="Каб." class="lesson-room" />
+            </div>
+          </div>
+          <div class="row" data-lesson="3">
+            <div style="width:42px; font-size:12px; padding-top:8px;">3.</div>
+            <div style="width:90px; font-size:12px; padding-top:8px;">09:50–10:30</div>
+            <div>
+              <input placeholder="Предмет" class="lesson-subject" />
+            </div>
+            <div style="max-width:90px;">
+              <input placeholder="Каб." class="lesson-room" />
+            </div>
+          </div>
+          <div class="row" data-lesson="4">
+            <div style="width:42px; font-size:12px; padding-top:8px;">4.</div>
+            <div style="width:90px; font-size:12px; padding-top:8px;">10:50–11:30</div>
+            <div>
+              <input placeholder="Предмет" class="lesson-subject" />
+            </div>
+            <div style="max-width:90px;">
+              <input placeholder="Каб." class="lesson-room" />
+            </div>
+          </div>
+          <div class="row" data-lesson="5">
+            <div style="width:42px; font-size:12px; padding-top:8px;">5.</div>
+            <div style="width:90px; font-size:12px; padding-top:8px;">11:40–12:20</div>
+            <div>
+              <input placeholder="Предмет" class="lesson-subject" />
+            </div>
+            <div style="max-width:90px;">
+              <input placeholder="Каб." class="lesson-room" />
+            </div>
+          </div>
+        </div>
+      </div>
       <div style="margin-top:8px; display:flex; gap:8px;">
         <button id="admin-day-save">Сохранить день</button>
         <button id="admin-day-cancel" class="secondary">Назад к выбору режима</button>
@@ -2227,15 +2331,18 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const adminDayEditor = document.getElementById('admin-day-editor');
     const adminWeekEditor = document.getElementById('admin-week-editor');
     const adminDaySelect = document.getElementById('admin-day-select');
-    const adminDayText = document.getElementById('admin-day-text');
     const adminDaySave = document.getElementById('admin-day-save');
     const adminDayCancel = document.getElementById('admin-day-cancel');
     const adminWeekText = document.getElementById('admin-week-text');
     const adminWeekSave = document.getElementById('admin-week-save');
     const adminWeekCancel = document.getElementById('admin-week-cancel');
-    const adminDayMode = document.getElementById('admin-day-mode');
     const adminDayDate = document.getElementById('admin-day-date');
     const adminDayDateWrap = document.getElementById('admin-day-date-wrap');
+    const adminLessonRows = document.getElementById('admin-lesson-rows');
+    const adminTypeBase = document.getElementById('admin-type-base');
+    const adminTypeTemp = document.getElementById('admin-type-temp');
+
+    let adminType = 'base';
 
     const tabBtnSchedule = document.getElementById('tab-btn-schedule');
     const tabBtnSub = document.getElementById('tab-btn-sub');
@@ -2306,6 +2413,10 @@ WEBAPP_HTML = """<!DOCTYPE html>
       const data = await api('/api/schedule', { type });
       scheduleBox.innerHTML = data.html || '';
       setStatus('');
+      // подсветка активной кнопки
+      document.querySelectorAll('button[data-type]').forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-type') === type);
+      });
     }
 
     async function saveSubscription() {
@@ -2331,21 +2442,37 @@ WEBAPP_HTML = """<!DOCTYPE html>
     async function saveAdminWeek() {
       const text = adminWeekText.value || '';
       setStatus('Сохранение расписания на неделю...');
-      await api('/api/admin/week', { week_text: text });
+      await api('/api/admin/week', { week_text: text, mode: adminType });
       setStatus('Расписание обновлено');
     }
 
     async function saveAdminDay() {
       const day = adminDaySelect.value;
-      const text = adminDayText.value || '';
-      const mode = adminDayMode.value || 'base';
       const date = adminDayDate.value || null;
-      if (mode === 'temp' && !date) {
-        setStatus('Укажи дату для временного расписания', true);
-        return;
-      }
+      // собираем строки занятий из фиксированных слотов
+      const times = [
+        ['08:00', '08:40'],
+        ['08:50', '09:30'],
+        ['09:50', '10:30'],
+        ['10:50', '11:30'],
+        ['11:40', '12:20'],
+      ];
+      const lines = [];
+      Array.from(adminLessonRows.querySelectorAll('.row')).forEach((row, idx) => {
+        const subjInput = row.querySelector('.lesson-subject');
+        const roomInput = row.querySelector('.lesson-room');
+        const subject = (subjInput.value || '').trim();
+        const room = (roomInput.value || '').trim();
+        if (!subject) {
+          return;
+        }
+        const [s, e] = times[idx] || times[0];
+        const roomPart = room ? '/' + room : '';
+        lines.push(`${s}-${e} ${subject}${roomPart}`);
+      });
+      const text = lines.join('\\n');
       setStatus('Сохранение расписания дня...');
-      await api('/api/admin/day', { day, lessons_text: text, mode, date });
+      await api('/api/admin/day', { day, lessons_text: text, mode: adminType, date });
       setStatus('Расписание дня обновлено');
     }
 
@@ -2362,6 +2489,18 @@ WEBAPP_HTML = """<!DOCTYPE html>
     tabBtnSub.addEventListener('click', () => setTab('sub'));
     tabBtnAdmin.addEventListener('click', () => setTab('admin'));
 
+    adminTypeBase.addEventListener('click', () => {
+      adminType = 'base';
+      adminTypeBase.classList.remove('secondary');
+      adminTypeTemp.classList.add('secondary');
+      adminDayDateWrap.classList.add('hidden');
+    });
+    adminTypeTemp.addEventListener('click', () => {
+      adminType = 'temp';
+      adminTypeTemp.classList.remove('secondary');
+      adminTypeBase.classList.add('secondary');
+      adminDayDateWrap.classList.remove('hidden');
+    });
     document.getElementById('admin-mode-day').addEventListener('click', () => {
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
@@ -2371,14 +2510,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminDayEditor.classList.add('hidden');
       adminWeekEditor.classList.remove('hidden');
-    });
-    adminDayMode.addEventListener('change', () => {
-      const mode = adminDayMode.value;
-      if (mode === 'temp') {
-        adminDayDateWrap.classList.remove('hidden');
-      } else {
-        adminDayDateWrap.classList.add('hidden');
-      }
     });
     adminDayCancel.addEventListener('click', () => {
       adminDayEditor.classList.add('hidden');
@@ -2445,8 +2576,6 @@ async def api_schedule(request: Request):
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     day_type = data.get("type", "today")
-    if day_type not in {"today", "tomorrow", "week"}:
-        day_type = "today"
     html_text = _get_schedule_html_for_day_type(day_type)
     return JSONResponse({"ok": True, "html": html_text})
 
@@ -2519,23 +2648,47 @@ async def api_admin_week(request: Request):
     if not _is_admin_user_id(user_id):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
     week_text = data.get("week_text", "") or ""
+    mode = (data.get("mode") or "base").strip()
     week = _parse_week_from_text(week_text)
     if week is None:
         return JSONResponse({"ok": False, "error": "bad_format"}, status_code=400)
-    for d in SCHEDULE_DAYS:
-        if d in week:
-            schedule[d] = week[d]
-    try:
-        _save_schedule_to_disk()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-    week_html = "\n\n".join(
-        _format_day_table_html(d, schedule.get(d, []))
-        for d in SCHEDULE_DAYS
-        if d in schedule
-    ) or _format_day_table_html("Неделя", [])
-    msg = _truncate_message("📢 Обновлено расписание на неделю:\n\n" + week_html)
-    asyncio.create_task(_notify_subscribers(msg))
+
+    if mode == "temp":
+        # Временная неделя: применяем к текущей неделе (пн-вс)
+        now_tz = datetime.now(tz=_get_tz())
+        base_monday_idx = 0
+        today_idx = now_tz.weekday()
+        monday = (now_tz - timedelta(days=today_idx - base_monday_idx)).date()
+        for offset, d_name in enumerate(SCHEDULE_DAYS):
+            if d_name not in week:
+                continue
+            target_date = monday + timedelta(days=offset)
+            key = target_date.isoformat()
+            day_lessons = week[d_name]
+            if isinstance(day_lessons, list):
+                temp_schedule[key] = day_lessons
+        try:
+            _save_temp_schedule_to_disk()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        week_html = _format_week_text()
+        msg = _truncate_message("📢 Временное расписание на неделю обновлено:\n\n" + week_html)
+        asyncio.create_task(_notify_subscribers(msg))
+    else:
+        for d in SCHEDULE_DAYS:
+            if d in week:
+                schedule[d] = week[d]
+        try:
+            _save_schedule_to_disk()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        week_html = "\n\n".join(
+            _format_day_table_html(d, schedule.get(d, []))
+            for d in SCHEDULE_DAYS
+            if d in schedule
+        ) or _format_day_table_html("Неделя", [])
+        msg = _truncate_message("📢 Обновлено расписание на неделю:\n\n" + week_html)
+        asyncio.create_task(_notify_subscribers(msg))
     return JSONResponse({"ok": True})
 
 
@@ -2567,12 +2720,18 @@ async def api_admin_day(request: Request):
 
     if mode == "temp":
         date_str = (data.get("date") or "").strip()
-        if not date_str:
-            return JSONResponse({"ok": False, "error": "no_date"}, status_code=400)
-        try:
-            d = datetime.fromisoformat(date_str).date()
-        except ValueError:
-            return JSONResponse({"ok": False, "error": "bad_date"}, status_code=400)
+        if date_str:
+            try:
+                d = datetime.fromisoformat(date_str).date()
+            except ValueError:
+                return JSONResponse({"ok": False, "error": "bad_date"}, status_code=400)
+        else:
+            # если дата не указана — берём текущую неделю и соответствующий день
+            now_tz = datetime.now(tz=_get_tz())
+            today_idx = now_tz.weekday()
+            target_idx = SCHEDULE_DAYS.index(day)
+            delta = target_idx - today_idx
+            d = (now_tz + timedelta(days=delta)).date()
         key = d.isoformat()
         temp_schedule[key] = lessons
         try:
