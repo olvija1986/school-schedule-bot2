@@ -51,6 +51,33 @@ ADMIN_USER_IDS = {
     if x.strip().isdigit()
 }
 
+# Динамические админы (добавляются через интерфейс, хранятся в файле)
+ADMINS_PATH = "admins.json"
+dynamic_admins: set[int] = set()
+
+
+def _load_dynamic_admins() -> None:
+    global dynamic_admins
+    try:
+        with open(ADMINS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            dynamic_admins = {int(x) for x in data if str(x).lstrip("-").isdigit()}
+        else:
+            dynamic_admins = set()
+    except FileNotFoundError:
+        dynamic_admins = set()
+    except Exception:
+        dynamic_admins = set()
+
+
+def _save_dynamic_admins() -> None:
+    tmp = f"{ADMINS_PATH}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(dynamic_admins), f, ensure_ascii=False)
+        f.write("\n")
+    os.replace(tmp, ADMINS_PATH)
+
 # ================== Загрузка расписания ==================
 with open("schedule.json", "r", encoding="utf-8") as f:
     schedule = json.load(f)
@@ -211,17 +238,23 @@ async def _notify_subscribers(text: str, parse_mode: str = "HTML") -> None:
         except Exception:
             pass
 
+def _is_superadmin_user_id(user_id: int) -> bool:
+    """Суперадмин — только из переменной окружения ADMIN_USER_IDS."""
+    return user_id in ADMIN_USER_IDS
+
+
 def _is_admin(update: Update) -> bool:
-    if not ADMIN_USER_IDS:
+    if not ADMIN_USER_IDS and not dynamic_admins:
         return True
     user = update.effective_user
-    return bool(user and user.id in ADMIN_USER_IDS)
+    return bool(user and _is_admin_user_id(user.id))
 
 
 def _is_admin_user_id(user_id: int) -> bool:
-    """Проверка администратора по user_id (для WebApp API)."""
-    # Для mini‑приложения админом считаем только явно указанных в ADMIN_USER_IDS
-    return user_id in ADMIN_USER_IDS
+    """Проверка администратора: env-список ИЛИ динамический список."""
+    if not ADMIN_USER_IDS and not dynamic_admins:
+        return True
+    return user_id in ADMIN_USER_IDS or user_id in dynamic_admins
 
 
 def _verify_webapp_init_data(init_data: str) -> dict | None:
@@ -2052,6 +2085,7 @@ async def startup_event():
     scheduler = AsyncIOScheduler(timezone=_get_tz())
     _load_temp_schedule_from_disk()
     _load_subscriptions_from_disk()
+    _load_dynamic_admins()
     for user_id_str in list(subscriptions.keys()):
         if user_id_str.isdigit():
             _reschedule_user(int(user_id_str))
@@ -2543,6 +2577,58 @@ WEBAPP_HTML = """<!DOCTYPE html>
       cursor: pointer;
       margin: 0;
     }
+    /* ── Управление админами ── */
+    .admins-section { margin-top: 16px; }
+    .admins-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+    .admins-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      border: 1px solid rgba(0,0,0,0.06);
+    }
+    .admins-item-info { flex: 1; min-width: 0; }
+    .admins-item-id {
+      font-size: 12px;
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    .admins-item-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(122,111,255,0.13);
+      color: #7a6fff;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .admins-item-del {
+      padding: 5px 11px;
+      font-size: 12px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #e24545, #ff8a7a);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      box-shadow: none;
+      min-width: 0;
+      flex-shrink: 0;
+      margin: 0;
+    }
+    .admins-empty {
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #888);
+      padding: 4px 2px;
+    }
+    .admins-add-row {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .admins-add-row .sub-field { flex: 1; }
+    .admins-add-row button { flex-shrink: 0; height: 42px; padding: 0 16px; border-radius: 10px; }
     /* ── Fullscreen редакторы ── */
     .admin-fullscreen {
       display: flex;
@@ -2796,6 +2882,21 @@ WEBAPP_HTML = """<!DOCTYPE html>
         <button id="admin-mode-day">Редактировать день</button>
         <button id="admin-mode-week" class="secondary">Редактировать неделю</button>
       </div>
+
+      <!-- Управление админами — только для суперадмина -->
+      <div id="admins-section" class="hidden admins-section">
+        <div class="sub-section-divider">Администраторы</div>
+        <div id="admins-list" class="admins-list">
+          <div class="admins-empty">Загрузка...</div>
+        </div>
+        <div class="admins-add-row">
+          <div class="sub-field">
+            <label class="sub-label">User ID нового админа</label>
+            <input id="admins-add-input" type="text" class="sub-input" placeholder="123456789" />
+          </div>
+          <button id="admins-add-btn">➕ Добавить</button>
+        </div>
+      </div>
     </div>
 
     <!-- Редактор дня -->
@@ -2869,6 +2970,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const adminTypeTemp = document.getElementById('admin-type-temp');
 
     let adminType = 'base';
+    let isSuperAdmin = false;
 
     function createLessonRow(data) {
       // Внешняя обёртка: [полоска управления] + [карточка урока]
@@ -3104,6 +3206,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
         if (subIcon) subIcon.textContent = '🔕';
       }
       isAdmin = !!data.is_admin;
+      isSuperAdmin = !!data.is_superadmin;
       // управление видимостью кнопок субботы
       if (!data.has_saturday) {
         scheduleSaturdayRow.style.display = 'none';
@@ -3120,6 +3223,11 @@ WEBAPP_HTML = """<!DOCTYPE html>
       setStatus('Готово');
       if (isAdmin) {
         await loadGroupSubscriptions();
+      }
+      if (isSuperAdmin) {
+        const adminsSection = document.getElementById('admins-section');
+        if (adminsSection) adminsSection.classList.remove('hidden');
+        await loadAdminsList();
       }
     }
 
@@ -3261,6 +3369,52 @@ WEBAPP_HTML = """<!DOCTYPE html>
       } catch(e) {}
     });
 
+    // ── Управление админами (только суперадмин) ──
+    async function loadAdminsList() {
+      const list = document.getElementById('admins-list');
+      if (!list) return;
+      list.innerHTML = '<div class="admins-empty">Загрузка...</div>';
+      try {
+        const data = await api('/api/admin/admins_list', {});
+        list.innerHTML = '';
+        if (!data.admins || !data.admins.length) {
+          list.innerHTML = '<div class="admins-empty">Нет дополнительных администраторов</div>';
+          return;
+        }
+        data.admins.forEach(uid => {
+          const item = document.createElement('div');
+          item.className = 'admins-item';
+          item.innerHTML =
+            '<div class="admins-item-info">' +
+              '<div class="admins-item-id">' + uid + '</div>' +
+            '</div>' +
+            '<span class="admins-item-badge">админ</span>' +
+            '<button class="admins-item-del" data-uid="' + uid + '">\u2715</button>';
+          item.querySelector('.admins-item-del').addEventListener('click', async () => {
+            try {
+              await api('/api/admin/admin_remove', { target_user_id: uid });
+              await loadAdminsList();
+            } catch(e) {}
+          });
+          list.appendChild(item);
+        });
+      } catch(e) {
+        list.innerHTML = '<div class="admins-empty">Ошибка загрузки</div>';
+      }
+    }
+
+    document.getElementById('admins-add-btn').addEventListener('click', async () => {
+      const input = document.getElementById('admins-add-input');
+      const uid = (input.value || '').trim();
+      if (!uid || !/^\d+$/.test(uid)) { setStatus('User ID должен быть числом', true); return; }
+      try {
+        await api('/api/admin/admin_add', { target_user_id: uid });
+        input.value = '';
+        setStatus('Администратор добавлен');
+        await loadAdminsList();
+      } catch(e) {}
+    });
+
     tabBtnSchedule.addEventListener('click', () => setTab('schedule'));
     tabBtnSub.addEventListener('click', () => setTab('sub'));
     tabBtnAdmin.addEventListener('click', () => setTab('admin'));
@@ -3291,6 +3445,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
       adminDayEditor.classList.remove('hidden');
+      // В режиме temp подставляем сегодняшнюю дату если поле пустое
+      if (adminType === 'temp' && !adminDayDate.value) {
+        const today = new Date();
+        adminDayDate.value = today.toISOString().split('T')[0];
+        const ruDays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
+        adminDaySelect.value = ruDays[today.getDay()];
+      }
       reloadAdminDay();
     });
     document.getElementById('admin-mode-week').addEventListener('click', () => {
@@ -3303,11 +3464,32 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.remove('hidden');
     });
     adminDaySelect.addEventListener('change', () => {
+      // В режиме temp — синхронизируем дату с выбранным днём недели
+      if (adminType === 'temp') {
+        const ruDays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
+        const targetIdx = ruDays.indexOf(adminDaySelect.value);
+        if (targetIdx >= 0) {
+          const today = new Date();
+          const delta = targetIdx - today.getDay();
+          const target = new Date(today);
+          target.setDate(today.getDate() + delta);
+          adminDayDate.value = target.toISOString().split('T')[0];
+        }
+      }
       if (!adminDayEditor.classList.contains('hidden')) {
         reloadAdminDay();
       }
     });
     adminDayDate.addEventListener('change', () => {
+      // Синхронизируем день недели с выбранной датой
+      if (adminDayDate.value) {
+        const ruDays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
+        const d = new Date(adminDayDate.value + 'T12:00:00');
+        const dayName = ruDays[d.getDay()];
+        if (adminDaySelect.value !== dayName) {
+          adminDaySelect.value = dayName;
+        }
+      }
       if (!adminDayEditor.classList.contains('hidden')) {
         reloadAdminDay();
       }
@@ -3373,6 +3555,7 @@ async def api_me(request: Request):
             "ok": True,
             "user": {"id": user_id, "first_name": user.get("first_name", "")},
             "is_admin": _is_admin_user_id(user_id),
+            "is_superadmin": _is_superadmin_user_id(user_id),
             "subscription": sub,
             "has_saturday": has_saturday,
             "has_saturday_profiles": has_saturday_profiles,
@@ -3803,4 +3986,72 @@ async def api_admin_unsubscribe_chat(request: Request):
             scheduler.remove_job(_job_id_for(chat_id))
         except Exception:
             pass
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/admins_list")
+async def api_admin_admins_list(request: Request):
+    """Список динамических админов (только для суперадмина)."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        user = _get_user_from_init_data(data.get("init_data", ""))
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_superadmin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    return JSONResponse({"ok": True, "admins": sorted(dynamic_admins)})
+
+
+@app.post("/api/admin/admin_add")
+async def api_admin_admin_add(request: Request):
+    """Добавить динамического админа (только для суперадмина)."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        user = _get_user_from_init_data(data.get("init_data", ""))
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_superadmin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    target_raw = str(data.get("target_user_id") or "").strip()
+    if not target_raw or not re.match(r"^\d+$", target_raw):
+        return JSONResponse({"ok": False, "error": "bad_user_id"}, status_code=400)
+    target_id = int(target_raw)
+    if _is_superadmin_user_id(target_id):
+        return JSONResponse({"ok": False, "error": "already_superadmin"}, status_code=400)
+    dynamic_admins.add(target_id)
+    _save_dynamic_admins()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/admin_remove")
+async def api_admin_admin_remove(request: Request):
+    """Удалить динамического админа (только для суперадмина)."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        user = _get_user_from_init_data(data.get("init_data", ""))
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_superadmin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    target_raw = str(data.get("target_user_id") or "").strip()
+    if not target_raw or not re.match(r"^\d+$", target_raw):
+        return JSONResponse({"ok": False, "error": "bad_user_id"}, status_code=400)
+    target_id = int(target_raw)
+    dynamic_admins.discard(target_id)
+    _save_dynamic_admins()
     return JSONResponse({"ok": True})
