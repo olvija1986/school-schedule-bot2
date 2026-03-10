@@ -1,6 +1,7 @@
-import os, json, uuid, asyncio, httpx, html, re, logging
+import os, json, uuid, asyncio, httpx, html, re, logging, hmac, hashlib
 from datetime import datetime, timedelta, date
 from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from zoneinfo import ZoneInfo
 from telegram import (
     BotCommand,
@@ -8,6 +9,9 @@ from telegram import (
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
     InputTextMessageContent,
+    WebAppInfo,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
     Update,
 )
 from telegram.ext import (
@@ -22,6 +26,7 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from urllib.parse import parse_qsl
 
 # ================== Настройки ==================
 logging.basicConfig(
@@ -212,6 +217,62 @@ def _is_admin(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.id in ADMIN_USER_IDS)
 
+
+def _is_admin_user_id(user_id: int) -> bool:
+    """Проверка администратора по user_id (для WebApp API)."""
+    if not ADMIN_USER_IDS:
+        return True
+    return user_id in ADMIN_USER_IDS
+
+
+def _verify_webapp_init_data(init_data: str) -> dict | None:
+    """
+    Проверка подписи initData от Telegram WebApp.
+    Возвращает dict с полями initData (включая 'user' как JSON‑строку),
+    либо None, если подпись неверна.
+    """
+    init_data = (init_data or "").strip()
+    if not init_data:
+        return None
+    try:
+        data = dict(parse_qsl(init_data, strict_parsing=True))
+    except ValueError:
+        return None
+
+    hash_value = data.pop("hash", None)
+    if not hash_value:
+        return None
+
+    check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+    secret_key = hmac.new(
+        key="WebAppData".encode("utf-8"),
+        msg=TOKEN.encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).digest()
+    calc_hash = hmac.new(
+        secret_key, check_string.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(calc_hash, hash_value):
+        return None
+    return data
+
+
+def _get_user_from_init_data(init_data: str) -> dict | None:
+    """Извлекает объект user из initData WebApp (после проверки подписи)."""
+    verified = _verify_webapp_init_data(init_data)
+    if not verified:
+        return None
+    raw_user = verified.get("user")
+    if not raw_user:
+        return None
+    try:
+        user = json.loads(raw_user)
+        if isinstance(user, dict) and "id" in user:
+            return user
+    except Exception:
+        return None
+    return None
+
 def _log_user(update: Update, action: str = "") -> None:
     """Логирует пользователя, приславшего обновление."""
     user = update.effective_user
@@ -399,6 +460,34 @@ async def _send_daily_reminder(chat_id: int, day_type: str = "today"):
         header = f"📅 Расписание на {date_label} ({day}):\n\n"
         text = _truncate_message(header + _format_day_table_html(day, lessons))
     await bot_app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+
+
+def _get_schedule_html_for_day_type(day_type: str = "today") -> str:
+    """HTML‑текст расписания для today/tomorrow/week (для WebApp API)."""
+    now = datetime.now(tz=_get_tz())
+    if day_type == "week":
+        return _truncate_message(_format_week_text_without_saturday())
+
+    target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
+    day_eng = target_date.strftime("%A")
+    day_ru = DAY_MAP.get(day_eng, day_eng)
+    date_label = "сегодня" if day_type == "today" else "завтра"
+
+    if day_ru == "Суббота":
+        profiles = _get_saturday_profiles_for_date(target_date)
+        if profiles:
+            parts = [
+                _format_day_table_html(f"Суббота — {label}", lessons)
+                for label, lessons in profiles
+            ]
+            return _truncate_message(
+                f"📅 Расписание на {date_label} (суббота):\n\n" + "\n\n".join(parts)
+            )
+        return _format_day_table_html("Суббота", [])
+
+    day, lessons = _get_lessons_for_date(target_date)
+    header = f"📅 Расписание на {date_label} ({day}):\n\n"
+    return _truncate_message(header + _format_day_table_html(day, lessons))
 
 def _job_id_for(user_id: int) -> str:
     return f"reminder:{user_id}"
@@ -771,6 +860,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/unsubscribe — отключить напоминания\n\n"
         "Inline-режим:\n"
         "Набери @бота и выбери подсказку или введи: today / tomorrow / week\n\n"
+        "Мини‑приложение:\n"
+        "/app — открыть мини‑приложение с расписанием\n"
     )
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -925,6 +1016,30 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     await update.message.reply_text("Готово. Напоминания отключены.")
+
+
+async def open_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /app — кнопка для открытия мини‑приложения."""
+    if not update.message:
+        return
+    _log_user(update, "open_app")
+    url = f"{BOT_URL.rstrip('/')}/webapp"
+    keyboard = ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton(
+                    text="Открыть расписание",
+                    web_app=WebAppInfo(url=url),
+                )
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    await update.message.reply_text(
+        "Нажми кнопку, чтобы открыть мини‑приложение с расписанием.",
+        reply_markup=keyboard,
+    )
 
 # ================== Редактирование расписания (/edit_schedule) ==================
 EDIT_MODE, EDIT_CHOOSE_DAY, EDIT_CHOOSE_SATURDAY_PROFILE, EDIT_ENTER_DATE, EDIT_ENTER_LESSONS, EDIT_ENTER_WEEK, EDIT_CONFIRM, EDIT_ENTER_SAT_ALL = range(8)
@@ -1730,6 +1845,7 @@ app = FastAPI()
 bot_app = ApplicationBuilder().token(TOKEN).build()
 bot_app.add_handler(CommandHandler("start", start))
 bot_app.add_handler(CommandHandler("help", help_command))
+bot_app.add_handler(CommandHandler("app", open_app))
 bot_app.add_handler(CommandHandler("subscribe", subscribe))
 bot_app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 bot_app.add_handler(CallbackQueryHandler(subscribe_time_callback, pattern=r"^subtime:"))
@@ -1821,3 +1937,378 @@ async def shutdown_event():
 @app.get("/")
 def root():
     return {"status": "Bot is running ✅"}
+
+
+WEBAPP_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Расписание</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 12px;
+      background: var(--tg-theme-bg-color, #ffffff);
+      color: var(--tg-theme-text-color, #000000);
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 8px;
+    }
+    h2 {
+      font-size: 16px;
+      margin: 16px 0 8px;
+    }
+    button {
+      padding: 8px 12px;
+      margin: 2px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: var(--tg-theme-button-color, #2a9df4);
+      color: var(--tg-theme-button-text-color, #ffffff);
+      font-size: 14px;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--tg-theme-hint-color, #888);
+      border: 1px solid rgba(0,0,0,0.1);
+    }
+    #schedule-box {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.03);
+      max-height: 320px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+    #status {
+      font-size: 12px;
+      color: var(--tg-theme-hint-color, #888);
+      margin-top: 4px;
+    }
+    input, select, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,0.15);
+      font-size: 14px;
+      margin-top: 4px;
+      background: var(--tg-theme-bg-color, #ffffff);
+      color: var(--tg-theme-text-color, #000000);
+    }
+    textarea {
+      min-height: 140px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .row > * {
+      flex: 1;
+    }
+    .card {
+      padding: 8px;
+      border-radius: 10px;
+      background: rgba(0,0,0,0.02);
+      margin-top: 8px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: rgba(0,0,0,0.06);
+    }
+  </style>
+</head>
+<body>
+  <h1>Школьное расписание</h1>
+  <div id="status">Загрузка...</div>
+
+  <div class="card">
+    <h2>Расписание</h2>
+    <div>
+      <button data-type="today">Сегодня</button>
+      <button data-type="tomorrow">Завтра</button>
+      <button data-type="week">Неделя (Пн–Пт)</button>
+    </div>
+    <div id="schedule-box"></div>
+  </div>
+
+  <div class="card">
+    <h2>Подписка</h2>
+    <div id="sub-info"></div>
+    <div class="row">
+      <div>
+        <label>Время (HH:MM)</label>
+        <input id="sub-time" type="time" />
+      </div>
+      <div>
+        <label>День</label>
+        <select id="sub-day-type">
+          <option value="today">Сегодня</option>
+          <option value="tomorrow">Завтра</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:8px; display:flex; gap:8px;">
+      <button id="sub-save">Сохранить</button>
+      <button id="sub-remove" class="secondary">Отключить</button>
+    </div>
+  </div>
+
+  <div class="card" id="admin-card" style="display:none;">
+    <h2>Админ‑редактор (неделя)</h2>
+    <div><span class="badge">Только для админов</span></div>
+    <p style="font-size:12px; margin-top:4px;">
+      Формат как в /edit_schedule (вся неделя). Пример:
+    </p>
+    <pre style="font-size:11px; white-space:pre-wrap; margin:4px 0 6px;">
+Понедельник:
+08:30-09:05 Математика/211
+
+Вторник:
+08:30-09:05 Русский язык/305
+    </pre>
+    <textarea id="admin-week-text" placeholder="Вставь расписание на неделю..."></textarea>
+    <div style="margin-top:8px;">
+      <button id="admin-save">Сохранить неделю</button>
+    </div>
+  </div>
+
+  <script>
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    const statusEl = document.getElementById('status');
+    const scheduleBox = document.getElementById('schedule-box');
+    const subInfo = document.getElementById('sub-info');
+    const subTime = document.getElementById('sub-time');
+    const subDayType = document.getElementById('sub-day-type');
+    const subSave = document.getElementById('sub-save');
+    const subRemove = document.getElementById('sub-remove');
+    const adminCard = document.getElementById('admin-card');
+    const adminWeekText = document.getElementById('admin-week-text');
+    const adminSave = document.getElementById('admin-save');
+
+    function setStatus(text, isError) {
+      statusEl.textContent = text || '';
+      statusEl.style.color = isError ? '#d33' : 'var(--tg-theme-hint-color, #888)';
+    }
+
+    async function api(path, payload) {
+      try {
+        const body = Object.assign({}, payload || {}, {
+          init_data: tg ? tg.initData : ''
+        });
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          throw new Error(data.error || 'Ошибка запроса');
+        }
+        return data;
+      } catch (e) {
+        console.error(e);
+        setStatus(e.message || 'Ошибка связи с сервером', true);
+        throw e;
+      }
+    }
+
+    async function loadMe() {
+      setStatus('Загрузка данных пользователя...');
+      const data = await api('/api/me', {});
+      if (data.subscription) {
+        subInfo.textContent =
+          'Подписка: ' +
+          data.subscription.time +
+          ' (' +
+          (data.subscription.day_type === 'tomorrow' ? 'завтра' : 'сегодня') +
+          ')';
+        subTime.value = data.subscription.time;
+        subDayType.value = data.subscription.day_type || 'today';
+      } else {
+        subInfo.textContent = 'Подписка не настроена.';
+      }
+      if (data.is_admin) {
+        adminCard.style.display = 'block';
+      }
+      setStatus('Готово');
+    }
+
+    async function loadSchedule(type) {
+      setStatus('Загрузка расписания...');
+      const data = await api('/api/schedule', { type });
+      scheduleBox.innerHTML = data.html || '';
+      setStatus('');
+    }
+
+    async function saveSubscription() {
+      const time = subTime.value;
+      const dayType = subDayType.value;
+      if (!time) {
+        setStatus('Укажи время в формате HH:MM', true);
+        return;
+      }
+      setStatus('Сохранение подписки...');
+      await api('/api/subscribe', { time, day_type: dayType });
+      setStatus('Подписка сохранена');
+      await loadMe();
+    }
+
+    async function removeSubscription() {
+      setStatus('Отключение подписки...');
+      await api('/api/unsubscribe', {});
+      setStatus('Подписка отключена');
+      await loadMe();
+    }
+
+    async function saveAdminWeek() {
+      const text = adminWeekText.value || '';
+      setStatus('Сохранение расписания на неделю...');
+      await api('/api/admin/week', { week_text: text });
+      setStatus('Расписание обновлено');
+    }
+
+    document.querySelectorAll('button[data-type]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const t = btn.getAttribute('data-type');
+        loadSchedule(t);
+      });
+    });
+    subSave.addEventListener('click', saveSubscription);
+    subRemove.addEventListener('click', removeSubscription);
+    adminSave.addEventListener('click', saveAdminWeek);
+
+    loadMe().then(() => loadSchedule('today')).catch(() => {});
+  </script>
+</body>
+</html>
+"""
+
+
+@app.get("/webapp", response_class=HTMLResponse)
+async def webapp_page():
+    return HTMLResponse(WEBAPP_HTML)
+
+
+@app.post("/api/me")
+async def api_me(request: Request):
+    data = await request.json()
+    init_data = data.get("init_data", "")
+    user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    sub = subscriptions.get(str(user_id))
+    return JSONResponse(
+        {
+            "ok": True,
+            "user": {"id": user_id, "first_name": user.get("first_name", "")},
+            "is_admin": _is_admin_user_id(user_id),
+            "subscription": sub,
+        }
+    )
+
+
+@app.post("/api/schedule")
+async def api_schedule(request: Request):
+    data = await request.json()
+    init_data = data.get("init_data", "")
+    if not _get_user_from_init_data(init_data):
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    day_type = data.get("type", "today")
+    if day_type not in {"today", "tomorrow", "week"}:
+        day_type = "today"
+    html_text = _get_schedule_html_for_day_type(day_type)
+    return JSONResponse({"ok": True, "html": html_text})
+
+
+@app.post("/api/subscribe")
+async def api_subscribe(request: Request):
+    data = await request.json()
+    init_data = data.get("init_data", "")
+    user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    time_str = data.get("time", "")
+    parsed = _parse_hhmm(time_str)
+    if not parsed:
+        return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
+    hh, mm = parsed
+    t = f"{hh:02d}:{mm:02d}"
+    day_type = data.get("day_type", "today")
+    if day_type not in {"today", "tomorrow"}:
+        day_type = "today"
+    chat_id = user_id
+    subscriptions[str(user_id)] = {"chat_id": chat_id, "time": t, "day_type": day_type}
+    _save_subscriptions_to_disk()
+    _reschedule_user(user_id)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/unsubscribe")
+async def api_unsubscribe(request: Request):
+    data = await request.json()
+    init_data = data.get("init_data", "")
+    user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    subscriptions.pop(str(user_id), None)
+    _save_subscriptions_to_disk()
+    if scheduler is not None:
+        try:
+            scheduler.remove_job(_job_id_for(user_id))
+        except Exception:
+            pass
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/week")
+async def api_admin_week(request: Request):
+    data = await request.json()
+    init_data = data.get("init_data", "")
+    user = _get_user_from_init_data(init_data)
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    week_text = data.get("week_text", "") or ""
+    week = _parse_week_from_text(week_text)
+    if week is None:
+        return JSONResponse({"ok": False, "error": "bad_format"}, status_code=400)
+    for d in SCHEDULE_DAYS:
+        if d in week:
+            schedule[d] = week[d]
+    try:
+        _save_schedule_to_disk()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    week_html = "\n\n".join(
+        _format_day_table_html(d, schedule.get(d, []))
+        for d in SCHEDULE_DAYS
+        if d in schedule
+    ) or _format_day_table_html("Неделя", [])
+    msg = _truncate_message("📢 Обновлено расписание на неделю:\n\n" + week_html)
+    asyncio.create_task(_notify_subscribers(msg))
+    return JSONResponse({"ok": True})
