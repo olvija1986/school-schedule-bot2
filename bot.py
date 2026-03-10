@@ -2021,7 +2021,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       margin: 0;
       padding: 12px;
-      background: radial-gradient(circle at top left, #f6f4ff, #fdfdfd);
+      background: var(--tg-theme-bg-color, #ffffff);
       color: var(--tg-theme-text-color, #000000);
     }
     h1 {
@@ -2063,8 +2063,8 @@ WEBAPP_HTML = """<!DOCTYPE html>
       margin-top: 8px;
       padding: 8px;
       border-radius: 12px;
-      background: rgba(255,255,255,0.9);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      background: var(--tg-theme-secondary-bg-color, rgba(255,255,255,0.9));
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
       height: calc(100vh - 210px);
       overflow-y: auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
@@ -2101,14 +2101,11 @@ WEBAPP_HTML = """<!DOCTYPE html>
       gap: 8px;
       margin-top: 4px;
     }
-    .row > * {
-      flex: 1;
-    }
     .card {
       padding: 8px;
       border-radius: 10px;
-      background: rgba(255,255,255,0.85);
-      box-shadow: 0 4px 14px rgba(0,0,0,0.04);
+      background: var(--tg-theme-secondary-bg-color, rgba(255,255,255,0.85));
+      box-shadow: 0 4px 14px rgba(0,0,0,0.12);
       margin-top: 8px;
     }
     .badge {
@@ -2146,6 +2143,48 @@ WEBAPP_HTML = """<!DOCTYPE html>
     }
     .hidden {
       display: none !important;
+    }
+    /* Строки уроков — адаптивная верстка для телефона */
+    .lesson-row {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .lesson-row > div {
+      min-width: 0;
+    }
+    .lesson-row > div:nth-child(1) {
+      flex: 0 0 auto;
+    }
+    .lesson-row > div:nth-child(2) {
+      flex: 0 0 110px;
+    }
+    .lesson-row > div:nth-child(3) {
+      flex: 1 1 140px;
+    }
+    .lesson-row > div:nth-child(4) {
+      flex: 0 0 80px;
+    }
+    @media (max-width: 480px) {
+      h1 {
+        font-size: 18px;
+      }
+      h2 {
+        font-size: 14px;
+      }
+      button {
+        font-size: 13px;
+      }
+      .lesson-row {
+        flex-wrap: wrap;
+      }
+      .lesson-row > div:nth-child(2),
+      .lesson-row > div:nth-child(3),
+      .lesson-row > div:nth-child(4) {
+        flex: 1 1 100%;
+      }
+      .lesson-row > div:nth-child(2) {
+        max-width: 180px;
+      }
     }
   </style>
 </head>
@@ -2302,7 +2341,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
 
     function createLessonRow(data) {
       const row = document.createElement('div');
-      row.className = 'row';
+      row.className = 'row lesson-row';
 
       const numDiv = document.createElement('div');
       numDiv.style.width = '28px';
