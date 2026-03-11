@@ -2081,34 +2081,108 @@ def _alice_truncate(text: str, max_len: int = _ALICE_MAX_LEN) -> str:
 
 
 def _alice_format_screen(lessons: list[str]) -> str:
-    """Экранный формат: №. ЧЧ:ММ–ЧЧ:ММ  Предмет  каб.ХХХ"""
+    """Экранный формат: ЧЧ:ММ  №. Предмет  каб.ХХХ
+    Время начала урока + предмет + кабинет — всё в одну строку.
+    """
     if not lessons:
         return "Занятий нет"
     lines = []
     for i, line in enumerate(lessons, start=1):
         p = _parse_lesson_line(line)
         subj = p["subject"] or line
-        time_part = f"{p['start']}–{p['end']}" if p["start"] and p["end"] else ""
-        room_part = f"каб.{p['room']}" if p["room"] else ""
-        parts = [x for x in [time_part, subj, room_part] if x]
-        lines.append(f"{i}. {'  '.join(parts)}")
+        time_part = f"{p['start']}  " if p["start"] else ""
+        room_part = f"  каб.{p['room']}" if p["room"] else ""
+        lines.append(f"{time_part}{i}. {subj}{room_part}")
     return "\n".join(lines)
 
 
+# Словарь расшифровки сокращений для голосового произношения Алисы.
+# Ключи — сокращения (в нижнем регистре), значения — полные названия.
+# Пополняйте по мере необходимости.
+_ALICE_SUBJECT_EXPAND: dict[str, str] = {
+    # РОВ
+    "ров":                      "Разговоры о важном",
+    # ВиСТ
+    "вист":                     "Вероятность и статистика",
+    "вист.":                    "Вероятность и статистика",
+    # Русский язык
+    "рус. яз":                  "Русский язык",
+    "рус.яз.":                  "Русский язык",
+    "рус. яз.":                 "Русский язык",
+    "рус.яз":                   "Русский язык",
+    # Английский язык
+    "англ. яз.":                "Английский язык",
+    "англ.яз.":                 "Английский язык",
+    "англ. яз":                 "Английский язык",
+    "англ.яз":                  "Английский язык",
+    # Физкультура
+    "физ-ра":                   "Физкультура",
+    "физ. культура":            "Физкультура",
+    # Окружающий мир
+    "окр. мир":                 "Окружающий мир",
+    "окр.мир":                  "Окружающий мир",
+    # Изобразительное искусство
+    "изо":                      "Изобразительное искусство",
+    # Дополнительные занятия
+    "доп занятия (1)":          "Дополнительные занятия",
+    "доп занятия (2)":          "Дополнительные занятия",
+    "доп. занятия":             "Дополнительные занятия",
+    # Орлята России
+    "орлята":                   "Орлята России",
+    # Математика / алгебра / геометрия
+    "матем.":                   "Математика",
+    "алг.":                     "Алгебра",
+    "геом.":                    "Геометрия",
+    # Практикум по математике
+    "практ. по мат-ке":         "Практикум по математике",
+    "практ.по мат-ке":          "Практикум по математике",
+    # Олимпийская математика
+    "олимп. мат-ка":            "Олимпиадная математика",
+    "олимп.мат-ка":             "Олимпиадная математика",
+    # Углублённая математика
+    "углубл. мате-ка":          "Углублённая математика",
+    "углубл.мате-ка":           "Углублённая математика",
+    # Алгоритмика
+    "алгоритмика":              "Алгоритмика",
+    # Экология растений
+    "экология растений":        "Экология растений",
+    # Введение в химию
+    "введение в химию":         "Введение в химию",
+    # Смысловое чтение
+    "смысловое чтение":         "Смысловое чтение",
+    # Прочие предметы
+    "обж":                      "Основы безопасности жизнедеятельности",
+    "инф.":                     "Информатика",
+    "биол.":                    "Биология",
+    "хим.":                     "Химия",
+    "физ.":                     "Физика",
+    "геогр.":                   "География",
+    "лит.":                     "Литература",
+    "ист.":                     "История",
+    "обществ.":                 "Обществознание",
+    "иностр. яз.":              "Иностранный язык",
+}
+
+
+def _alice_expand_subject(name: str) -> str:
+    """Заменяет сокращение предмета на полное название для TTS."""
+    return _ALICE_SUBJECT_EXPAND.get(name.lower().strip(), name)
+
+
 def _alice_format_tts(lessons: list[str]) -> str:
-    """Голосовой формат для TTS — линейный, без спецсимволов."""
+    """Голосовой формат для TTS.
+    Произносим: начало первого урока, список предметов, конец последнего.
+    Кабинеты и время промежуточных уроков не произносим.
+    """
     if not lessons:
         return "занятий нет"
-    parts = []
-    for i, line in enumerate(lessons, start=1):
-        p = _parse_lesson_line(line)
-        subj = p["subject"] or line
-        time_part = f"с {p['start']} до {p['end']}" if p["start"] and p["end"] else ""
-        chunk = f"{i}. {subj}"
-        if time_part:
-            chunk += f", {time_part}"
-        parts.append(chunk)
-    return ". ".join(parts) + "."
+    parsed = [_parse_lesson_line(line) for line in lessons]
+    subjects = [_alice_expand_subject(p["subject"] or lessons[i]) for i, p in enumerate(parsed)]
+    first_start = next((p["start"] for p in parsed if p["start"]), "")
+    last_end = next((p["end"] for p in reversed(parsed) if p["end"]), "")
+    intro = f"Начало в {first_start}. " if first_start else ""
+    outro = f" Конец в {last_end}." if last_end else "."
+    return f"{intro}{', '.join(subjects)}.{outro}"
 
 
 def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
@@ -2196,19 +2270,19 @@ def _alice_handle_request(req_body: dict) -> dict:
         return _alice_resp(msg, msg, session, end_session=True)
 
     # ── Расписание на сегодня ────────────────────────────────────────────────
-    if any(w in text_to_check for w in ["сегодня", "today", "сейчас"]):
+    if any(w in text_to_check for w in ["сегодня", "на сегодня", "today", "сейчас", "что сегодня", "какие сегодня", "какое сегодня"]):
         display, tts = _alice_day_text("today")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
                            session, buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Расписание на завтра ─────────────────────────────────────────────────
-    if any(w in text_to_check for w in ["завтра", "tomorrow"]):
+    if any(w in text_to_check for w in ["завтра", "на завтра", "tomorrow", "что завтра", "какие завтра", "какое завтра"]):
         display, tts = _alice_day_text("tomorrow")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
                            session, buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Общий запрос расписания → сегодня ───────────────────────────────────
-    if any(w in text_to_check for w in ["расписание", "уроки", "занятия"]):
+    if any(w in text_to_check for w in ["расписание", "уроки", "занятия", "какие уроки", "что за уроки"]):
         display, tts = _alice_day_text("today")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
                            session, buttons=_ALICE_MAIN_BUTTONS)
