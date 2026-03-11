@@ -2122,10 +2122,19 @@ def _alice_day_text(day_type: str = "today") -> str:
     return f"{prefix}, {day_ru.lower()}. {_alice_format_lessons(lessons)}"
 
 
-def _alice_week_text() -> str:
-    """Текст расписания на неделю для голосового ответа Алисы."""
+_ALICE_MAX_LEN = 950  # оставляем запас до лимита 1024
+
+
+def _alice_truncate(text: str, max_len: int = _ALICE_MAX_LEN) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip(" ;,.") + "…"
+
+
+def _alice_week_days() -> list[tuple[str, str]]:
+    """Возвращает список (название_дня, текст_уроков) для каждого дня недели."""
     now_tz = datetime.now(tz=_get_tz())
-    parts = []
+    result = []
     for day in SCHEDULE_DAYS:
         day_idx = SCHEDULE_DAYS.index(day)
         today_idx = now_tz.weekday()
@@ -2135,18 +2144,54 @@ def _alice_week_text() -> str:
             profiles = _get_saturday_profiles_for_date(target_date)
             for label, lessons in profiles:
                 if lessons:
-                    parts.append(f"Суббота, профиль {label}: {_alice_format_lessons(lessons)}")
+                    result.append((f"Суббота, {label}", _alice_format_lessons(lessons)))
             continue
 
         date_key = target_date.isoformat()
         raw = temp_schedule.get(date_key)
         lessons = raw if isinstance(raw, list) else schedule.get(day, [])
         if isinstance(lessons, list) and lessons:
-            parts.append(f"{day}: {_alice_format_lessons(lessons)}")
+            result.append((day, _alice_format_lessons(lessons)))
 
-    if not parts:
-        return "Расписание на неделю не найдено."
-    return "Расписание на неделю. " + " ".join(parts)
+    return result
+
+
+def _alice_week_page(days: list[tuple[str, str]], page: int) -> tuple[str, bool]:
+    """
+    Разбивает список дней на страницы по ~950 символов.
+    Возвращает (текст_страницы, есть_ли_следующая).
+    """
+    if not days:
+        return "Расписание на неделю не найдено.", False
+
+    pages: list[list[tuple[str, str]]] = []
+    current_page: list[tuple[str, str]] = []
+    current_len = 0
+
+    for day_name, day_text in days:
+        chunk = f"{day_name}: {day_text} "
+        if current_len + len(chunk) > _ALICE_MAX_LEN and current_page:
+            pages.append(current_page)
+            current_page = [(day_name, day_text)]
+            current_len = len(chunk)
+        else:
+            current_page.append((day_name, day_text))
+            current_len += len(chunk)
+
+    if current_page:
+        pages.append(current_page)
+
+    if page >= len(pages):
+        return "Это всё расписание на неделю.", False
+
+    parts = [f"{d}: {t}" for d, t in pages[page]]
+    has_next = page + 1 < len(pages)
+    text = " ".join(parts)
+
+    if has_next:
+        text += " Сказать «дальше», чтобы услышать продолжение."
+
+    return _alice_truncate(text), has_next
 
 
 def _alice_build_response(
@@ -2185,42 +2230,87 @@ def _alice_handle_request(req_body: dict) -> dict:
     """Основная логика обработки запроса от Алисы."""
     session = req_body.get("session", {})
     request = req_body.get("request", {})
+    # session_state хранит состояние между ходами (пагинация недели)
+    session_state = req_body.get("state", {}).get("session", {})
+
     command = (request.get("command") or "").lower().strip()
     original = (request.get("original_utterance") or "").lower().strip()
+    text_to_check = command or original
 
     is_new = session.get("new", False)
 
-    if is_new or not command or command in {"помощь", "help", "что ты умеешь"}:
+    # ── Продолжение пагинации недели ────────────────────────────────────────
+    week_mode = session_state.get("week_mode", False)
+    week_page = int(session_state.get("week_page", 0))
+
+    if week_mode and any(w in text_to_check for w in ["дальше", "далее", "продолжай", "следующий", "ещё", "еще"]):
+        days = _alice_week_days()
+        text, has_next = _alice_week_page(days, week_page)
+        new_state = {"week_mode": has_next, "week_page": week_page + 1 if has_next else 0}
+        buttons = [{"title": "Дальше", "hide": True}] if has_next else _ALICE_MAIN_BUTTONS
+        return {
+            "version": "1.0",
+            "session": session,
+            "session_state": new_state,
+            "response": {
+                "text": text,
+                "tts": text,
+                "end_session": False,
+                "buttons": buttons,
+            },
+        }
+
+    # ── Приветствие / помощь ─────────────────────────────────────────────────
+    if is_new or not command or text_to_check in {"помощь", "help", "что ты умеешь"}:
         return _alice_build_response(
             _ALICE_HELP_TEXT,
             buttons=_ALICE_MAIN_BUTTONS,
             session=session,
         )
 
-    # Определяем интент по команде / произнесённой фразе
-    text_to_check = command or original
-
-    if any(w in text_to_check for w in ["сегодня", "today", "сейчас"]):
-        answer = _alice_day_text("today")
-    elif any(w in text_to_check for w in ["завтра", "tomorrow"]):
-        answer = _alice_day_text("tomorrow")
-    elif any(w in text_to_check for w in ["неделя", "неделю", "week", "всё", "всё расписание"]):
-        answer = _alice_week_text()
-    elif any(w in text_to_check for w in ["расписание", "уроки", "занятия"]):
-        # Общий запрос без уточнения — отвечаем на сегодня
-        answer = _alice_day_text("today")
-    elif any(w in text_to_check for w in ["стоп", "выход", "хватит", "пока", "выйти"]):
+    # ── Выход ────────────────────────────────────────────────────────────────
+    if any(w in text_to_check for w in ["стоп", "выход", "хватит", "пока", "выйти"]):
         return _alice_build_response(
             "До свидания! Удачной учёбы!",
             session=session,
             end_session=True,
         )
-    else:
-        answer = (
-            "Не понял запрос. "
-            + _ALICE_HELP_TEXT
-        )
 
+    # ── Расписание на сегодня ────────────────────────────────────────────────
+    if any(w in text_to_check for w in ["сегодня", "today", "сейчас"]):
+        answer = _alice_truncate(_alice_day_text("today"))
+        return _alice_build_response(answer, buttons=_ALICE_MAIN_BUTTONS, session=session)
+
+    # ── Расписание на завтра ─────────────────────────────────────────────────
+    if any(w in text_to_check for w in ["завтра", "tomorrow"]):
+        answer = _alice_truncate(_alice_day_text("tomorrow"))
+        return _alice_build_response(answer, buttons=_ALICE_MAIN_BUTTONS, session=session)
+
+    # ── Расписание на неделю (с пагинацией) ─────────────────────────────────
+    if any(w in text_to_check for w in ["неделя", "неделю", "week", "всё расписание"]):
+        days = _alice_week_days()
+        text, has_next = _alice_week_page(days, 0)
+        new_state = {"week_mode": has_next, "week_page": 1 if has_next else 0}
+        buttons = [{"title": "Дальше", "hide": True}] if has_next else _ALICE_MAIN_BUTTONS
+        return {
+            "version": "1.0",
+            "session": session,
+            "session_state": new_state,
+            "response": {
+                "text": text,
+                "tts": text,
+                "end_session": False,
+                "buttons": buttons,
+            },
+        }
+
+    # ── Общий запрос расписания — сегодня ───────────────────────────────────
+    if any(w in text_to_check for w in ["расписание", "уроки", "занятия"]):
+        answer = _alice_truncate(_alice_day_text("today"))
+        return _alice_build_response(answer, buttons=_ALICE_MAIN_BUTTONS, session=session)
+
+    # ── Не понял ─────────────────────────────────────────────────────────────
+    answer = "Не понял запрос. " + _ALICE_HELP_TEXT
     return _alice_build_response(answer, buttons=_ALICE_MAIN_BUTTONS, session=session)
 
 
