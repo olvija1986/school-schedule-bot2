@@ -2066,6 +2066,196 @@ async def telegram_webhook(request: Request):
     await bot_app.process_update(update)
     return {"ok": True}
 
+# ================== Яндекс Алиса ==================
+# Переменная окружения ALICE_SKILL_ID — опциональная проверка ID навыка.
+# Если не задана — запросы принимаются без проверки (удобно при разработке).
+ALICE_SKILL_ID = (os.environ.get("ALICE_SKILL_ID") or "").strip()
+
+
+def _alice_format_lessons(lessons: list[str]) -> str:
+    """Преобразует список уроков в голосовой текст для Алисы."""
+    if not lessons:
+        return "В этот день занятий нет."
+    parts = []
+    for i, line in enumerate(lessons, start=1):
+        p = _parse_lesson_line(line)
+        subj = p["subject"] or line
+        time_part = f"с {p['start']} до {p['end']}" if p["start"] and p["end"] else ""
+        room_part = f"кабинет {p['room']}" if p["room"] else ""
+        extras = ", ".join(filter(None, [time_part, room_part]))
+        lesson_str = f"{i}. {subj}"
+        if extras:
+            lesson_str += f" — {extras}"
+        parts.append(lesson_str)
+    return "; ".join(parts) + "."
+
+
+def _alice_day_text(day_type: str = "today") -> str:
+    """Возвращает голосовой текст расписания для заданного типа дня."""
+    now = datetime.now(tz=_get_tz())
+
+    if day_type == "tomorrow":
+        target_date = (now + timedelta(days=1)).date()
+        prefix = "Завтра"
+    else:
+        target_date = now.date()
+        prefix = "Сегодня"
+
+    day_eng = target_date.strftime("%A")
+    day_ru = DAY_MAP.get(day_eng, day_eng)
+
+    if day_ru == "Суббота":
+        profiles = _get_saturday_profiles_for_date(target_date)
+        if not profiles:
+            return f"{prefix}, в субботу, занятий нет."
+        parts = []
+        for label, lessons in profiles:
+            if lessons:
+                parts.append(f"Профиль {label}: {_alice_format_lessons(lessons)}")
+        if not parts:
+            return f"{prefix}, в субботу, занятий нет."
+        return f"{prefix}, суббота. {' '.join(parts)}"
+
+    _, lessons = _get_lessons_for_date(target_date)
+    if not lessons:
+        return f"{prefix}, {day_ru.lower()}, занятий нет."
+    return f"{prefix}, {day_ru.lower()}. {_alice_format_lessons(lessons)}"
+
+
+def _alice_week_text() -> str:
+    """Текст расписания на неделю для голосового ответа Алисы."""
+    now_tz = datetime.now(tz=_get_tz())
+    parts = []
+    for day in SCHEDULE_DAYS:
+        day_idx = SCHEDULE_DAYS.index(day)
+        today_idx = now_tz.weekday()
+        target_date = (now_tz + timedelta(days=day_idx - today_idx)).date()
+
+        if day == "Суббота":
+            profiles = _get_saturday_profiles_for_date(target_date)
+            for label, lessons in profiles:
+                if lessons:
+                    parts.append(f"Суббота, профиль {label}: {_alice_format_lessons(lessons)}")
+            continue
+
+        date_key = target_date.isoformat()
+        raw = temp_schedule.get(date_key)
+        lessons = raw if isinstance(raw, list) else schedule.get(day, [])
+        if isinstance(lessons, list) and lessons:
+            parts.append(f"{day}: {_alice_format_lessons(lessons)}")
+
+    if not parts:
+        return "Расписание на неделю не найдено."
+    return "Расписание на неделю. " + " ".join(parts)
+
+
+def _alice_build_response(
+    text: str,
+    tts: str | None = None,
+    session: dict | None = None,
+    end_session: bool = False,
+    buttons: list[dict] | None = None,
+) -> dict:
+    """Формирует ответ в формате Яндекс Диалогов."""
+    return {
+        "version": "1.0",
+        "session": session or {},
+        "response": {
+            "text": text,
+            "tts": tts or text,
+            "end_session": end_session,
+            "buttons": buttons or [],
+        },
+    }
+
+
+_ALICE_HELP_TEXT = (
+    "Я умею рассказывать расписание уроков. "
+    "Скажите: «расписание на сегодня», «расписание на завтра» или «расписание на неделю»."
+)
+
+_ALICE_MAIN_BUTTONS = [
+    {"title": "На сегодня", "hide": True},
+    {"title": "На завтра", "hide": True},
+    {"title": "На неделю", "hide": True},
+]
+
+
+def _alice_handle_request(req_body: dict) -> dict:
+    """Основная логика обработки запроса от Алисы."""
+    session = req_body.get("session", {})
+    request = req_body.get("request", {})
+    command = (request.get("command") or "").lower().strip()
+    original = (request.get("original_utterance") or "").lower().strip()
+
+    is_new = session.get("new", False)
+
+    if is_new or not command or command in {"помощь", "help", "что ты умеешь"}:
+        return _alice_build_response(
+            _ALICE_HELP_TEXT,
+            buttons=_ALICE_MAIN_BUTTONS,
+            session=session,
+        )
+
+    # Определяем интент по команде / произнесённой фразе
+    text_to_check = command or original
+
+    if any(w in text_to_check for w in ["сегодня", "today", "сейчас"]):
+        answer = _alice_day_text("today")
+    elif any(w in text_to_check for w in ["завтра", "tomorrow"]):
+        answer = _alice_day_text("tomorrow")
+    elif any(w in text_to_check for w in ["неделя", "неделю", "week", "всё", "всё расписание"]):
+        answer = _alice_week_text()
+    elif any(w in text_to_check for w in ["расписание", "уроки", "занятия"]):
+        # Общий запрос без уточнения — отвечаем на сегодня
+        answer = _alice_day_text("today")
+    elif any(w in text_to_check for w in ["стоп", "выход", "хватит", "пока", "выйти"]):
+        return _alice_build_response(
+            "До свидания! Удачной учёбы!",
+            session=session,
+            end_session=True,
+        )
+    else:
+        answer = (
+            "Не понял запрос. "
+            + _ALICE_HELP_TEXT
+        )
+
+    return _alice_build_response(answer, buttons=_ALICE_MAIN_BUTTONS, session=session)
+
+
+@app.post("/alice")
+async def alice_webhook(request: Request):
+    """
+    Эндпоинт для навыка Яндекс Алисы.
+    Укажите этот URL в настройках навыка на https://dialogs.yandex.ru/developer/
+    Пример: https://<ваш-домен>/alice
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+
+    # Опциональная проверка skill_id
+    if ALICE_SKILL_ID:
+        incoming_skill_id = (body.get("session") or {}).get("skill_id", "")
+        if incoming_skill_id != ALICE_SKILL_ID:
+            logger.warning(f"Alice: неверный skill_id: {incoming_skill_id!r}")
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    try:
+        response = _alice_handle_request(body)
+    except Exception as e:
+        logger.exception(f"Alice handler error: {e}")
+        response = _alice_build_response(
+            "Произошла ошибка. Попробуйте позже.",
+            session=(body.get("session") or {}),
+            end_session=False,
+        )
+
+    return JSONResponse(response)
+
+
 # ================== Lifespan ==================
 @app.on_event("startup")
 async def startup_event():
