@@ -2081,18 +2081,17 @@ def _alice_truncate(text: str, max_len: int = _ALICE_MAX_LEN) -> str:
 
 
 def _alice_format_screen(lessons: list[str]) -> str:
-    """Экранный формат: ЧЧ:ММ  №. Предмет  каб.ХХХ
-    Время начала урока + предмет + кабинет — всё в одну строку.
-    """
+    """Экранный формат: №. ЧЧ:ММ–ЧЧ:ММ  Предмет  каб.ХХХ"""
     if not lessons:
         return "Занятий нет"
     lines = []
     for i, line in enumerate(lessons, start=1):
         p = _parse_lesson_line(line)
         subj = p["subject"] or line
-        time_part = f"{p['start']}  " if p["start"] else ""
+        time_part = f"{p['start']}–{p['end']}" if p["start"] and p["end"] else p["start"] if p["start"] else ""
         room_part = f"  каб.{p['room']}" if p["room"] else ""
-        lines.append(f"{time_part}{i}. {subj}{room_part}")
+        time_str = f"  {time_part}" if time_part else ""
+        lines.append(f"{i}.{time_str}  {subj}{room_part}")
     return "\n".join(lines)
 
 
