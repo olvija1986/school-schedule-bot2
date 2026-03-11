@@ -2071,27 +2071,32 @@ async def telegram_webhook(request: Request):
 # Если не задана — запросы принимаются без проверки (удобно при разработке).
 ALICE_SKILL_ID = (os.environ.get("ALICE_SKILL_ID") or "").strip()
 
+_ALICE_MAX_LEN = 950  # запас до лимита 1024
 
-def _alice_format_lessons(lessons: list[str]) -> str:
-    """Преобразует список уроков в голосовой текст для Алисы."""
+
+def _alice_truncate(text: str, max_len: int = _ALICE_MAX_LEN) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip(" ;,.\n") + "…"
+
+
+def _alice_format_screen(lessons: list[str]) -> str:
+    """Экранный формат: №. ЧЧ:ММ–ЧЧ:ММ  Предмет  каб.ХХХ"""
     if not lessons:
-        return "занятий нет"
-    parts = []
+        return "Занятий нет"
+    lines = []
     for i, line in enumerate(lessons, start=1):
         p = _parse_lesson_line(line)
         subj = p["subject"] or line
-        time_part = f"{p['start']} — {p['end']}" if p["start"] and p["end"] else ""
-        room_part = f"каб. {p['room']}" if p["room"] else ""
-        meta = ", ".join(filter(None, [time_part, room_part]))
-        lesson_str = f"{i}. {subj}"
-        if meta:
-            lesson_str += f"\n   {meta}"
-        parts.append(lesson_str)
-    return "\n".join(parts)
+        time_part = f"{p['start']}–{p['end']}" if p["start"] and p["end"] else ""
+        room_part = f"каб.{p['room']}" if p["room"] else ""
+        parts = [x for x in [time_part, subj, room_part] if x]
+        lines.append(f"{i}. {'  '.join(parts)}")
+    return "\n".join(lines)
 
 
-def _alice_format_lessons_tts(lessons: list[str]) -> str:
-    """Голосовая версия — без переносов строк, для TTS."""
+def _alice_format_tts(lessons: list[str]) -> str:
+    """Голосовой формат для TTS — линейный, без спецсимволов."""
     if not lessons:
         return "занятий нет"
     parts = []
@@ -2099,17 +2104,16 @@ def _alice_format_lessons_tts(lessons: list[str]) -> str:
         p = _parse_lesson_line(line)
         subj = p["subject"] or line
         time_part = f"с {p['start']} до {p['end']}" if p["start"] and p["end"] else ""
-        lesson_str = f"{i}. {subj}"
+        chunk = f"{i}. {subj}"
         if time_part:
-            lesson_str += f", {time_part}"
-        parts.append(lesson_str)
+            chunk += f", {time_part}"
+        parts.append(chunk)
     return ". ".join(parts) + "."
 
 
 def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
-    """Возвращает (display_text, tts_text) расписания для заданного типа дня."""
+    """Возвращает (display_text, tts_text) расписания на сегодня или завтра."""
     now = datetime.now(tz=_get_tz())
-
     if day_type == "tomorrow":
         target_date = (now + timedelta(days=1)).date()
         prefix = "Завтра"
@@ -2123,151 +2127,44 @@ def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
     if day_ru == "Суббота":
         profiles = _get_saturday_profiles_for_date(target_date)
         if not profiles:
-            msg = f"{prefix}, суббота — занятий нет."
-            return msg, msg
+            msg = f"{prefix}, суббота\nЗанятий нет"
+            return msg, f"{prefix}, суббота. Занятий нет."
         text_parts, tts_parts = [], []
         for label, lessons in profiles:
             if lessons:
-                text_parts.append(f"📚 {label}:\n{_alice_format_lessons(lessons)}")
-                tts_parts.append(f"Профиль {label}: {_alice_format_lessons_tts(lessons)}")
+                text_parts.append(f"[ {label} ]\n{_alice_format_screen(lessons)}")
+                tts_parts.append(f"Профиль {label}: {_alice_format_tts(lessons)}")
         if not text_parts:
-            msg = f"{prefix}, суббота — занятий нет."
-            return msg, msg
-        header = f"📅 {prefix}, суббота"
+            msg = f"{prefix}, суббота\nЗанятий нет"
+            return msg, f"{prefix}, суббота. Занятий нет."
+        header = f"{prefix}, суббота"
         return header + "\n\n" + "\n\n".join(text_parts), f"{prefix}, суббота. " + " ".join(tts_parts)
 
     _, lessons = _get_lessons_for_date(target_date)
     if not lessons:
-        msg = f"{prefix}, {day_ru} — занятий нет."
-        return msg, msg
-    header = f"📅 {prefix}, {day_ru}"
-    text = header + "\n\n" + _alice_format_lessons(lessons)
-    tts = f"{prefix}, {day_ru.lower()}. {_alice_format_lessons_tts(lessons)}"
-    return text, tts
+        return f"{prefix}, {day_ru}\nЗанятий нет", f"{prefix}, {day_ru.lower()}. Занятий нет."
 
-
-_ALICE_MAX_LEN = 950  # оставляем запас до лимита 1024
-
-
-def _alice_truncate(text: str, max_len: int = _ALICE_MAX_LEN) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[:max_len].rstrip(" ;,.") + "…"
-
-
-def _alice_week_days() -> list[tuple[str, str, str]]:
-    """Возвращает список (название_дня, display_text, tts_text) для каждого дня."""
-    now_tz = datetime.now(tz=_get_tz())
-    result = []
-    for day in SCHEDULE_DAYS:
-        day_idx = SCHEDULE_DAYS.index(day)
-        today_idx = now_tz.weekday()
-        target_date = (now_tz + timedelta(days=day_idx - today_idx)).date()
-
-        if day == "Суббота":
-            profiles = _get_saturday_profiles_for_date(target_date)
-            for label, lessons in profiles:
-                if lessons:
-                    result.append((
-                        f"Суббота, {label}",
-                        _alice_format_lessons(lessons),
-                        _alice_format_lessons_tts(lessons),
-                    ))
-            continue
-
-        date_key = target_date.isoformat()
-        raw = temp_schedule.get(date_key)
-        lessons = raw if isinstance(raw, list) else schedule.get(day, [])
-        if isinstance(lessons, list) and lessons:
-            result.append((day, _alice_format_lessons(lessons), _alice_format_lessons_tts(lessons)))
-
-    return result
-
-
-def _alice_week_page(days: list[tuple[str, str, str]], page: int) -> tuple[str, str, bool]:
-    """
-    Разбивает список дней на страницы по ~950 символов (по tts длине).
-    Возвращает (display_text, tts_text, есть_ли_следующая).
-    """
-    if not days:
-        return "Расписание на неделю не найдено.", "Расписание на неделю не найдено.", False
-
-    pages: list[list[tuple[str, str, str]]] = []
-    current_page: list[tuple[str, str, str]] = []
-    current_len = 0
-
-    for day_name, day_display, day_tts in days:
-        tts_chunk = f"{day_name}: {day_tts} "
-        if current_len + len(tts_chunk) > _ALICE_MAX_LEN and current_page:
-            pages.append(current_page)
-            current_page = [(day_name, day_display, day_tts)]
-            current_len = len(tts_chunk)
-        else:
-            current_page.append((day_name, day_display, day_tts))
-            current_len += len(tts_chunk)
-
-    if current_page:
-        pages.append(current_page)
-
-    if page >= len(pages):
-        fin = "Это всё расписание на неделю."
-        return fin, fin, False
-
-    has_next = page + 1 < len(pages)
-
-    # display: красивый многострочный текст
-    display_parts = []
-    for day_name, day_display, _ in pages[page]:
-        display_parts.append(f"📗 {day_name}:\n{day_display}")
-    display_text = "\n\n".join(display_parts)
-    if has_next:
-        display_text += "\n\nСкажите «дальше» для продолжения."
-
-    # tts: линейный текст для голоса
-    tts_parts = [f"{d}: {t}" for d, _, t in pages[page]]
-    tts_text = " ".join(tts_parts)
-    if has_next:
-        tts_text += " Скажите дальше, чтобы услышать продолжение."
-
-    return _alice_truncate(display_text, 1020), _alice_truncate(tts_text), has_next
-
-
-def _alice_build_response(
-    text: str,
-    tts: str | None = None,
-    session: dict | None = None,
-    end_session: bool = False,
-    buttons: list[dict] | None = None,
-) -> dict:
-    """Формирует ответ в формате Яндекс Диалогов."""
-    return {
-        "version": "1.0",
-        "session": session or {},
-        "response": {
-            "text": text,
-            "tts": tts or text,
-            "end_session": end_session,
-            "buttons": buttons or [],
-        },
-    }
+    header = f"{prefix}, {day_ru}"
+    display = header + "\n" + _alice_format_screen(lessons)
+    tts = f"{prefix}, {day_ru.lower()}. {_alice_format_tts(lessons)}"
+    return display, tts
 
 
 _ALICE_HELP_TEXT = (
-    "Я умею рассказывать расписание уроков. "
-    "Скажите: «расписание на сегодня», «расписание на завтра» или «расписание на неделю»."
+    "Я расскажу расписание уроков. "
+    "Скажите «на сегодня» или «на завтра»."
 )
 
 _ALICE_MAIN_BUTTONS = [
     {"title": "На сегодня", "hide": True},
     {"title": "На завтра", "hide": True},
-    {"title": "На неделю", "hide": True},
 ]
 
 
 def _alice_resp(text: str, tts: str, session: dict, end_session: bool = False,
-                buttons: list | None = None, state: dict | None = None) -> dict:
-    """Универсальный конструктор ответа Алисы с поддержкой session_state."""
-    resp: dict = {
+                buttons: list | None = None) -> dict:
+    """Конструктор ответа Алисы."""
+    return {
         "version": "1.0",
         "session": session,
         "response": {
@@ -2277,90 +2174,58 @@ def _alice_resp(text: str, tts: str, session: dict, end_session: bool = False,
             "buttons": buttons or [],
         },
     }
-    if state is not None:
-        resp["session_state"] = state
-    return resp
 
 
 def _alice_handle_request(req_body: dict) -> dict:
     """Основная логика обработки запроса от Алисы."""
     session = req_body.get("session", {})
     request = req_body.get("request", {})
-    # session_state хранит номер страницы между ходами (пагинация недели)
-    session_state = req_body.get("state", {}).get("session", {})
-
     command = (request.get("command") or "").lower().strip()
     original = (request.get("original_utterance") or "").lower().strip()
     text_to_check = command or original
-
     is_new = session.get("new", False)
-
-    # ── Продолжение пагинации недели ────────────────────────────────────────
-    week_page = session_state.get("week_page")  # None если не в режиме недели
-    is_next_cmd = any(w in text_to_check for w in
-                      ["дальше", "далее", "продолжай", "следующий", "ещё", "еще", "продолжение"])
-
-    if week_page is not None and is_next_cmd:
-        days = _alice_week_days()
-        display, tts, has_next = _alice_week_page(days, week_page)
-        new_state = {"week_page": week_page + 1} if has_next else {}
-        buttons = [{"title": "Дальше", "hide": True}] if has_next else _ALICE_MAIN_BUTTONS
-        return _alice_resp(display, tts, session, buttons=buttons, state=new_state)
 
     # ── Приветствие / помощь ─────────────────────────────────────────────────
     if is_new or not command or text_to_check in {"помощь", "help", "что ты умеешь"}:
         return _alice_resp(_ALICE_HELP_TEXT, _ALICE_HELP_TEXT, session,
-                           buttons=_ALICE_MAIN_BUTTONS, state={})
+                           buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Выход ────────────────────────────────────────────────────────────────
     if any(w in text_to_check for w in ["стоп", "выход", "хватит", "пока", "выйти"]):
         msg = "До свидания! Удачной учёбы!"
-        return _alice_resp(msg, msg, session, end_session=True, state={})
+        return _alice_resp(msg, msg, session, end_session=True)
 
     # ── Расписание на сегодня ────────────────────────────────────────────────
     if any(w in text_to_check for w in ["сегодня", "today", "сейчас"]):
         display, tts = _alice_day_text("today")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS, state={})
+                           session, buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Расписание на завтра ─────────────────────────────────────────────────
     if any(w in text_to_check for w in ["завтра", "tomorrow"]):
         display, tts = _alice_day_text("tomorrow")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS, state={})
+                           session, buttons=_ALICE_MAIN_BUTTONS)
 
-    # ── Расписание на неделю (с пагинацией) ─────────────────────────────────
-    if any(w in text_to_check for w in ["неделя", "неделю", "week", "всё расписание"]):
-        days = _alice_week_days()
-        display, tts, has_next = _alice_week_page(days, 0)
-        new_state = {"week_page": 1} if has_next else {}
-        buttons = [{"title": "Дальше", "hide": True}] if has_next else _ALICE_MAIN_BUTTONS
-        return _alice_resp(display, tts, session, buttons=buttons, state=new_state)
-
-    # ── Общий запрос расписания — сегодня ───────────────────────────────────
+    # ── Общий запрос расписания → сегодня ───────────────────────────────────
     if any(w in text_to_check for w in ["расписание", "уроки", "занятия"]):
         display, tts = _alice_day_text("today")
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS, state={})
+                           session, buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Не понял ─────────────────────────────────────────────────────────────
     answer = "Не понял запрос. " + _ALICE_HELP_TEXT
-    return _alice_resp(answer, answer, session, buttons=_ALICE_MAIN_BUTTONS, state={})
+    return _alice_resp(answer, answer, session, buttons=_ALICE_MAIN_BUTTONS)
 
 
 @app.post("/alice")
 async def alice_webhook(request: Request):
-    """
-    Эндпоинт для навыка Яндекс Алисы.
-    Укажите этот URL в настройках навыка на https://dialogs.yandex.ru/developer/
-    Пример: https://<ваш-домен>/alice
-    """
+    """Эндпоинт для навыка Яндекс Алисы. URL: https://<домен>/alice"""
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "invalid json"}, status_code=400)
 
-    # Опциональная проверка skill_id
     if ALICE_SKILL_ID:
         incoming_skill_id = (body.get("session") or {}).get("skill_id", "")
         if incoming_skill_id != ALICE_SKILL_ID:
@@ -2371,11 +2236,8 @@ async def alice_webhook(request: Request):
         response = _alice_handle_request(body)
     except Exception as e:
         logger.exception(f"Alice handler error: {e}")
-        response = _alice_build_response(
-            "Произошла ошибка. Попробуйте позже.",
-            session=(body.get("session") or {}),
-            end_session=False,
-        )
+        err_msg = "Произошла ошибка. Попробуйте позже."
+        response = _alice_resp(err_msg, err_msg, body.get("session") or {})
 
     return JSONResponse(response)
 
