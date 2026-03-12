@@ -1,4 +1,10 @@
 import os, json, uuid, asyncio, httpx, html, re, logging, hmac, hashlib
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials as GCredentials
+    _GSPREAD_OK = True
+except ImportError:
+    _GSPREAD_OK = False
 from datetime import datetime, timedelta, date
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -42,6 +48,177 @@ WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
 if not TOKEN or not BOT_URL:
     raise RuntimeError("Не заданы переменные окружения TELEGRAM_TOKEN или BOT_URL")
+# ================== Google Sheets ==================
+GOOGLE_SHEET_ID   = (os.environ.get("GOOGLE_SHEET_ID") or "").strip()
+_GCREDS_JSON_RAW  = (os.environ.get("GOOGLE_CREDENTIALS_JSON") or "").strip()
+
+_gs_client: "gspread.Client | None" = None
+_gs_spreadsheet = None   # gspread.Spreadsheet
+
+_GS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+
+def _gs_connect() -> bool:
+    """Открывает соединение с Google Sheets. Возвращает True при успехе."""
+    global _gs_client, _gs_spreadsheet
+    if not _GSPREAD_OK:
+        logger.warning("gspread не установлен — работаем без Google Sheets")
+        return False
+    if not GOOGLE_SHEET_ID or not _GCREDS_JSON_RAW:
+        logger.warning("GOOGLE_SHEET_ID или GOOGLE_CREDENTIALS_JSON не заданы — работаем без Google Sheets")
+        return False
+    try:
+        creds_dict = json.loads(_GCREDS_JSON_RAW)
+        creds = GCredentials.from_service_account_info(creds_dict, scopes=_GS_SCOPES)
+        _gs_client = gspread.authorize(creds)
+        _gs_spreadsheet = _gs_client.open_by_key(GOOGLE_SHEET_ID)
+        logger.info("✅ Google Sheets подключён")
+        return True
+    except Exception as e:
+        logger.error(f"Google Sheets connect error: {e}")
+        return False
+
+def _gs_sheet(name: str):
+    """Возвращает лист по имени, создаёт если нет."""
+    global _gs_spreadsheet
+    try:
+        return _gs_spreadsheet.worksheet(name)
+    except gspread.WorksheetNotFound:
+        return _gs_spreadsheet.add_worksheet(title=name, rows=500, cols=10)
+    except Exception as e:
+        logger.error(f"_gs_sheet({name}) error: {e}")
+        return None
+
+# ── Загрузка ──────────────────────────────────────────────────────────────
+
+def _gs_load_schedule() -> dict | None:
+    """Загружает основное расписание из листа schedule."""
+    try:
+        ws = _gs_sheet("schedule")
+        if ws is None:
+            return None
+        rows = ws.get_all_values()
+        if not rows:
+            return None
+        result = {}
+        for row in rows:
+            if len(row) < 2 or not row[0].strip():
+                continue
+            day, raw = row[0].strip(), row[1].strip()
+            # Пропускаем заголовок и строки не являющиеся днями недели
+            if day not in SCHEDULE_DAYS:
+                continue
+            if not raw:
+                continue
+            try:
+                result[day] = json.loads(raw)
+            except json.JSONDecodeError:
+                # Пробуем исправить одинарные кавычки (питоновский repr)
+                try:
+                    import ast
+                    result[day] = ast.literal_eval(raw)
+                except Exception:
+                    logger.warning(f"_gs_load_schedule: не удалось распарсить '{day}'")
+        return result if result else None
+    except Exception as e:
+        logger.error(f"_gs_load_schedule error: {e}")
+        return None
+
+def _gs_load_temp_schedule() -> dict | None:
+    """Загружает временное расписание из листа temp_schedule."""
+    try:
+        ws = _gs_sheet("temp_schedule")
+        if ws is None:
+            return None
+        rows = ws.get_all_values()
+        if not rows:
+            return {}
+        result = {}
+        for row in rows:
+            if len(row) < 2 or not row[0].strip():
+                continue
+            date_key, raw = row[0].strip(), row[1].strip()
+            try:
+                result[date_key] = json.loads(raw)
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        logger.error(f"_gs_load_temp_schedule error: {e}")
+        return None
+
+def _gs_load_subscriptions() -> dict | None:
+    """Загружает подписки из листа subscriptions."""
+    try:
+        ws = _gs_sheet("subscriptions")
+        if ws is None:
+            return None
+        rows = ws.get_all_values()
+        if not rows:
+            return {}
+        result = {}
+        for row in rows:
+            if len(row) < 3 or not row[0].strip():
+                continue
+            chat_id_str = row[0].strip()
+            time_str    = row[1].strip()
+            day_type    = row[2].strip() or "today"
+            try:
+                chat_id = int(chat_id_str)
+            except ValueError:
+                continue
+            result[chat_id_str] = {"chat_id": chat_id, "time": time_str, "day_type": day_type}
+        return result
+    except Exception as e:
+        logger.error(f"_gs_load_subscriptions error: {e}")
+        return None
+
+# ── Сохранение ────────────────────────────────────────────────────────────
+
+def _gs_save_schedule() -> None:
+    """Сохраняет основное расписание в лист schedule."""
+    try:
+        ws = _gs_sheet("schedule")
+        if ws is None:
+            return
+        rows = [[day, json.dumps(data, ensure_ascii=False)]
+                for day, data in schedule.items()]
+        ws.clear()
+        if rows:
+            ws.update(rows, value_input_option="RAW")
+    except Exception as e:
+        logger.error(f"_gs_save_schedule error: {e}")
+
+def _gs_save_temp_schedule() -> None:
+    """Сохраняет временное расписание в лист temp_schedule."""
+    try:
+        ws = _gs_sheet("temp_schedule")
+        if ws is None:
+            return
+        rows = [[date_key, json.dumps(data, ensure_ascii=False)]
+                for date_key, data in temp_schedule.items()]
+        ws.clear()
+        if rows:
+            ws.update(rows, value_input_option="RAW")
+    except Exception as e:
+        logger.error(f"_gs_save_temp_schedule error: {e}")
+
+def _gs_save_subscriptions() -> None:
+    """Сохраняет подписки в лист subscriptions."""
+    try:
+        ws = _gs_sheet("subscriptions")
+        if ws is None:
+            return
+        rows = [[str(entry["chat_id"]), entry.get("time",""), entry.get("day_type","today")]
+                for entry in subscriptions.values()]
+        ws.clear()
+        if rows:
+            ws.update(rows, value_input_option="RAW")
+    except Exception as e:
+        logger.error(f"_gs_save_subscriptions error: {e}")
+
+
 
 # Необязательно: ограничение доступа к редактированию расписания
 # Формат: "12345,67890"
@@ -80,8 +257,15 @@ def _save_dynamic_admins() -> None:
     os.replace(tmp, ADMINS_PATH)
 
 # ================== Загрузка расписания ==================
-with open("schedule.json", "r", encoding="utf-8") as f:
-    schedule = json.load(f)
+try:
+    with open("schedule.json", "r", encoding="utf-8") as f:
+        schedule = json.load(f)
+except FileNotFoundError:
+    logger.warning("schedule.json не найден — будет загружен из Google Sheets при старте")
+    schedule = {}
+except Exception as e:
+    logger.error(f"Ошибка чтения schedule.json: {e}")
+    schedule = {}
 
 TEMP_SCHEDULE_PATH = "temp_schedule.json"
 temp_schedule: dict[str, list[str]] = {}
@@ -197,6 +381,8 @@ def _save_temp_schedule_to_disk() -> None:
         json.dump(temp_schedule, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp_path, TEMP_SCHEDULE_PATH)
+    if _gs_spreadsheet is not None:
+        _gs_save_temp_schedule()
 
 def _load_subscriptions_from_disk() -> None:
     global subscriptions
@@ -218,6 +404,8 @@ def _save_subscriptions_to_disk() -> None:
         json.dump(subscriptions, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp_path, SUBSCRIPTIONS_PATH)
+    if _gs_spreadsheet is not None:
+        _gs_save_subscriptions()
 
 async def _notify_subscribers(text: str, parse_mode: str = "HTML") -> None:
     """Отправляет сообщение всем подписчикам (напоминаний)."""
@@ -347,6 +535,8 @@ def _save_schedule_to_disk() -> None:
         json.dump(schedule, f, ensure_ascii=False, indent=4)
         f.write("\n")
     os.replace(tmp_path, "schedule.json")
+    if _gs_spreadsheet is not None:
+        _gs_save_schedule()
 
 def _parse_lesson_line(line: str) -> dict:
     raw = (line or "").strip()
@@ -2168,6 +2358,21 @@ def _alice_expand_subject(name: str) -> str:
     return _ALICE_SUBJECT_EXPAND.get(name.lower().strip(), name)
 
 
+def _alice_clean_tts(text: str) -> str:
+    """Убирает символы, которые ломают интонацию и громкость TTS Алисы."""
+    # Заменяем тире и дефисы между словами на паузу-запятую
+    text = re.sub(r"\s*[–—]\s*", ", ", text)
+    # Убираем скобки — Алиса их иногда читает как паузу
+    text = re.sub(r"[(){}\[\]]", "", text)
+    # Косая черта между кабинетами → «или»
+    text = re.sub(r"(\d)/(\d)", r" или ", text)
+    # Точки в конце сокращений убираем (мешают интонации)
+    text = re.sub(r"([А-Яа-яA-Za-z])\.", r"", text)
+    # Несколько пробелов → один
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
 def _alice_format_tts(lessons: list[str]) -> str:
     """Голосовой формат для TTS.
     Произносим: начало первого урока, список предметов, конец последнего.
@@ -2176,12 +2381,17 @@ def _alice_format_tts(lessons: list[str]) -> str:
     if not lessons:
         return "занятий нет"
     parsed = [_parse_lesson_line(line) for line in lessons]
-    subjects = [_alice_expand_subject(p["subject"] or lessons[i]) for i, p in enumerate(parsed)]
+    subjects = [_alice_clean_tts(_alice_expand_subject(p["subject"] or lessons[i]))
+                for i, p in enumerate(parsed)]
+    # Фильтруем пустышки (прочерки «-»)
+    subjects = [s for s in subjects if s and s.strip("-– ")]
+    if not subjects:
+        return "занятий нет"
     first_start = next((p["start"] for p in parsed if p["start"]), "")
     last_end = next((p["end"] for p in reversed(parsed) if p["end"]), "")
     intro = f"Начало в {first_start}. " if first_start else ""
-    outro = f" Конец в {last_end}." if last_end else "."
-    return f"{intro}{', '.join(subjects)}.{outro}"
+    outro = f". Конец в {last_end}." if last_end else "."
+    return f"{intro}{', '.join(subjects)}{outro}"
 
 
 def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
@@ -2201,31 +2411,31 @@ def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
         profiles = _get_saturday_profiles_for_date(target_date)
         if not profiles:
             msg = f"{prefix}, суббота\nЗанятий нет"
-            return msg, f"{prefix}, суббота. Занятий нет."
+            return msg, f"{prefix} суббота. Занятий нет."
         text_parts, tts_parts = [], []
         for label, lessons in profiles:
             if lessons:
                 text_parts.append(f"[ {label} ]\n{_alice_format_screen(lessons)}")
-                tts_parts.append(f"Профиль {label}: {_alice_format_tts(lessons)}")
+                tts_parts.append(f"Профиль {label}. {_alice_format_tts(lessons)}")
         if not text_parts:
             msg = f"{prefix}, суббота\nЗанятий нет"
-            return msg, f"{prefix}, суббота. Занятий нет."
+            return msg, f"{prefix} суббота. Занятий нет."
         header = f"{prefix}, суббота"
-        return header + "\n\n" + "\n\n".join(text_parts), f"{prefix}, суббота. " + " ".join(tts_parts)
+        return header + "\n\n" + "\n\n".join(text_parts), f"{prefix} суббота. " + " ".join(tts_parts)
 
     _, lessons = _get_lessons_for_date(target_date)
     if not lessons:
-        return f"{prefix}, {day_ru}\nЗанятий нет", f"{prefix}, {day_ru.lower()}. Занятий нет."
+        return f"{prefix}, {day_ru}\nЗанятий нет", f"{prefix} {day_ru.lower()}. Занятий нет."
 
     header = f"{prefix}, {day_ru}"
     display = header + "\n" + _alice_format_screen(lessons)
-    tts = f"{prefix}, {day_ru.lower()}. {_alice_format_tts(lessons)}"
+    tts = f"{prefix} {day_ru.lower()}. {_alice_format_tts(lessons)}"
     return display, tts
 
 
 _ALICE_HELP_TEXT = (
-    "Я расскажу расписание уроков. "
-    "Скажите «на сегодня» или «на завтра»."
+    "Расскажу расписание уроков. "
+    "Скажи «на сегодня» или «на завтра»."
 )
 
 _ALICE_MAIN_BUTTONS = [
@@ -2258,36 +2468,46 @@ def _alice_handle_request(req_body: dict) -> dict:
     text_to_check = command or original
     is_new = session.get("new", False)
 
-    # ── Приветствие / помощь ─────────────────────────────────────────────────
+    # ── Расписание на сегодня ────────────────────────────────────────────────
+    # Проверяем ДО приветствия: команда может прийти сразу при запуске навыка
+    # («Алиса, попроси <навык> на сегодня»)
+    if any(w in text_to_check for w in [
+        "сегодня", "на сегодня", "расписание на сегодня",
+        "today", "сейчас", "что сегодня", "какие сегодня", "какое сегодня",
+    ]):
+        display, tts = _alice_day_text("today")
+        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
+                           session, buttons=_ALICE_MAIN_BUTTONS)
+
+    # ── Расписание на завтра ─────────────────────────────────────────────────
+    if any(w in text_to_check for w in [
+        "завтра", "на завтра", "расписание на завтра",
+        "tomorrow", "что завтра", "какие завтра", "какое завтра",
+    ]):
+        display, tts = _alice_day_text("tomorrow")
+        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
+                           session, buttons=_ALICE_MAIN_BUTTONS)
+
+    # ── Общий запрос расписания → сегодня ───────────────────────────────────
+    if any(w in text_to_check for w in [
+        "расписание", "уроки", "занятия", "какие уроки", "что за уроки",
+    ]):
+        display, tts = _alice_day_text("today")
+        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
+                           session, buttons=_ALICE_MAIN_BUTTONS)
+
+    # ── Приветствие / помощь — только если команды нет или явный запрос ─────
     if is_new or not command or text_to_check in {"помощь", "help", "что ты умеешь"}:
         return _alice_resp(_ALICE_HELP_TEXT, _ALICE_HELP_TEXT, session,
                            buttons=_ALICE_MAIN_BUTTONS)
 
     # ── Выход ────────────────────────────────────────────────────────────────
     if any(w in text_to_check for w in ["стоп", "выход", "хватит", "пока", "выйти"]):
-        msg = "До свидания! Удачной учёбы!"
+        msg = "До свидания! Удачи в учёбе!"
         return _alice_resp(msg, msg, session, end_session=True)
 
-    # ── Расписание на сегодня ────────────────────────────────────────────────
-    if any(w in text_to_check for w in ["сегодня", "на сегодня", "today", "сейчас", "что сегодня", "какие сегодня", "какое сегодня"]):
-        display, tts = _alice_day_text("today")
-        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
-
-    # ── Расписание на завтра ─────────────────────────────────────────────────
-    if any(w in text_to_check for w in ["завтра", "на завтра", "tomorrow", "что завтра", "какие завтра", "какое завтра"]):
-        display, tts = _alice_day_text("tomorrow")
-        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
-
-    # ── Общий запрос расписания → сегодня ───────────────────────────────────
-    if any(w in text_to_check for w in ["расписание", "уроки", "занятия", "какие уроки", "что за уроки"]):
-        display, tts = _alice_day_text("today")
-        return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
-
     # ── Не понял ─────────────────────────────────────────────────────────────
-    answer = "Не понял запрос. " + _ALICE_HELP_TEXT
+    answer = "Не поняла запрос. " + _ALICE_HELP_TEXT
     return _alice_resp(answer, answer, session, buttons=_ALICE_MAIN_BUTTONS)
 
 
@@ -2332,10 +2552,46 @@ async def startup_event():
         ]
     )
 
-    global scheduler
+    global scheduler, schedule
+
+    # ── Google Sheets: подключение и загрузка ────────────────────────────
+    if _gs_connect():
+        gs_sched = _gs_load_schedule()
+        if gs_sched:
+            schedule = gs_sched
+            logger.info("📊 Основное расписание загружено из Google Sheets")
+            # Синхронизируем локальный файл
+            try:
+                tmp = "schedule.json.tmp"
+                with open(tmp, "w", encoding="utf-8") as _f:
+                    json.dump(schedule, _f, ensure_ascii=False, indent=4)
+                os.replace(tmp, "schedule.json")
+            except Exception:
+                pass
+        else:
+            logger.info("📊 Google Sheets пуст — используем локальный schedule.json, загружаем в Sheets")
+            _gs_save_schedule()
+
+        gs_temp = _gs_load_temp_schedule()
+        if gs_temp is not None:
+            global temp_schedule
+            temp_schedule = gs_temp
+            logger.info("📊 Временное расписание загружено из Google Sheets")
+        
+        gs_subs = _gs_load_subscriptions()
+        if gs_subs is not None:
+            global subscriptions
+            subscriptions = gs_subs
+            logger.info("📊 Подписки загружены из Google Sheets")
+    else:
+        # Fallback: локальные файлы
+        _load_temp_schedule_from_disk()
+        _load_subscriptions_from_disk()
+
     scheduler = AsyncIOScheduler(timezone=_get_tz())
-    _load_temp_schedule_from_disk()
-    _load_subscriptions_from_disk()
+    if _gs_spreadsheet is None:
+        _load_temp_schedule_from_disk()
+        _load_subscriptions_from_disk()
     _load_dynamic_admins()
     for user_id_str in list(subscriptions.keys()):
         if user_id_str.isdigit():
