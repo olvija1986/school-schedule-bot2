@@ -407,14 +407,25 @@ def _save_subscriptions_to_disk() -> None:
     if _gs_spreadsheet is not None:
         _gs_save_subscriptions()
 
-async def _notify_subscribers(text: str, parse_mode: str = "HTML") -> None:
-    """Отправляет сообщение всем подписчикам (напоминаний)."""
+async def _notify_subscribers(text: str, parse_mode: str = "HTML",
+                              notify_type: str = "changes") -> None:
+    """Отправляет сообщение подписчикам.
+    notify_type='changes' — только тем у кого включены уведомления об изменениях.
+    notify_type='daily'   — только тем у кого включены ежедневные напоминания (используется планировщиком).
+    notify_type='all'     — всем у кого есть хоть какая-то подписка.
+    """
     if not subscriptions:
         return
     chat_ids = set()
     for entry in subscriptions.values():
         cid = entry.get("chat_id")
-        if cid is not None:
+        if cid is None:
+            continue
+        if notify_type == "all":
+            chat_ids.add(int(cid))
+        elif notify_type == "changes" and entry.get("notify_changes", True):
+            chat_ids.add(int(cid))
+        elif notify_type == "daily" and entry.get("notify_daily", True):
             chat_ids.add(int(cid))
     for chat_id in chat_ids:
         try:
@@ -1228,141 +1239,154 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/app — открыть мини‑приложение с расписанием\n"
     )
 
+def _sub_keyboard(entry: dict | None) -> InlineKeyboardMarkup:
+    """Клавиатура управления подписками с чекбоксами."""
+    daily_on   = bool(entry and entry.get("notify_daily", False))
+    changes_on = bool(entry and entry.get("notify_changes", False))
+    time_str   = entry.get("time", "—") if entry else "—"
+    day_type   = entry.get("day_type", "today") if entry else "today"
+    day_label  = "завтра" if day_type == "tomorrow" else "сегодня"
+
+    daily_icon   = "✅" if daily_on   else "☑️"
+    changes_icon = "✅" if changes_on else "☑️"
+
+    rows = [
+        [InlineKeyboardButton(
+            f"{daily_icon} Ежедневное расписание ({day_label} в {time_str})",
+            callback_data="sub_toggle:daily"
+        )],
+        [InlineKeyboardButton(
+            f"{changes_icon} Уведомления об изменениях расписания",
+            callback_data="sub_toggle:changes"
+        )],
+    ]
+    if daily_on:
+        rows.append([
+            InlineKeyboardButton("🕐 Изменить время", callback_data="sub_set_time"),
+            InlineKeyboardButton(
+                "📅 " + ("Завтра" if day_type == "today" else "Сегодня"),
+                callback_data="sub_toggle:day_type"
+            ),
+        ])
+    rows.append([InlineKeyboardButton("❌ Закрыть", callback_data="sub_close")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _sub_text(entry: dict | None) -> str:
+    daily_on   = bool(entry and entry.get("notify_daily", False))
+    changes_on = bool(entry and entry.get("notify_changes", False))
+    if not daily_on and not changes_on:
+        return "🔕 Уведомления отключены. Нажми нужный пункт чтобы включить."
+    parts = []
+    if daily_on:
+        t = entry.get("time", "—")
+        dl = "завтра" if entry.get("day_type") == "tomorrow" else "сегодня"
+        parts.append(f"📅 Ежедневно в {t} — расписание на {dl}")
+    if changes_on:
+        parts.append("🔔 Уведомления при изменении расписания")
+    return "Твои подписки:\n" + "\n".join(parts)
+
+
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     _log_user(update, "subscribe")
-    if not context.args:
-        # Показываем кнопки выбора времени с 06:00 до 20:00
+    user = update.effective_user
+    if not user:
+        return
+    entry = subscriptions.get(str(user.id))
+    await update.message.reply_text(
+        _sub_text(entry),
+        reply_markup=_sub_keyboard(entry),
+    )
+
+
+async def subscribe_manage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка всех кнопок экрана подписок."""
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return
+
+    data = query.data or ""
+    uid = str(user.id)
+    entry = dict(subscriptions.get(uid) or {})
+    if not entry:
+        entry = {"chat_id": chat.id, "notify_daily": False, "notify_changes": False,
+                 "time": "07:00", "day_type": "today"}
+
+    if data == "sub_close":
+        await query.edit_message_text("Настройки подписок закрыты.")
+        return
+
+    if data == "sub_toggle:daily":
+        entry["notify_daily"] = not entry.get("notify_daily", False)
+        entry["chat_id"] = chat.id
+
+    elif data == "sub_toggle:changes":
+        entry["notify_changes"] = not entry.get("notify_changes", False)
+        entry["chat_id"] = chat.id
+
+    elif data == "sub_toggle:day_type":
+        entry["day_type"] = "tomorrow" if entry.get("day_type", "today") == "today" else "today"
+
+    elif data == "sub_set_time":
+        # Показываем выбор времени
         rows: list[list[InlineKeyboardButton]] = []
         row: list[InlineKeyboardButton] = []
         for hour in range(6, 21):
             t_btn = f"{hour:02d}:00"
-            row.append(InlineKeyboardButton(t_btn, callback_data=f"subtime:{t_btn}"))
+            row.append(InlineKeyboardButton(t_btn, callback_data=f"sub_time:{t_btn}"))
             if len(row) >= 4:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
-
-        keyboard = InlineKeyboardMarkup(rows)
-        await update.message.reply_text(
-            "Выбери время, в которое присылать расписание.\n"
-            "Также можно ввести время вручную: /subscribe HH:MM [сегодня|завтра]",
-            reply_markup=keyboard,
-        )
-        return
-    parsed = _parse_hhmm(context.args[0])
-    if not parsed:
-        await update.message.reply_text("Неверное время. Формат: HH:MM (например 07:30)")
-        return
-    hh, mm = parsed
-    t = f"{hh:02d}:{mm:02d}"
-
-    # Если второй аргумент не передан — показываем кнопки выбора
-    if len(context.args) < 2:
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📅 На сегодня", callback_data=f"subscribe:{t}:today"),
-                InlineKeyboardButton("📅 На завтра", callback_data=f"subscribe:{t}:tomorrow"),
-            ]
-        ])
-        await update.message.reply_text(
-            f"Время {t} выбрано. Какое расписание присылать?",
-            reply_markup=keyboard,
+        rows.append([InlineKeyboardButton("↩️ Назад", callback_data="sub_back")])
+        await query.edit_message_text(
+            "Выбери время ежедневного напоминания:",
+            reply_markup=InlineKeyboardMarkup(rows),
         )
         return
 
-    # Второй аргумент передан напрямую
-    arg2 = context.args[1].lower().strip()
-    if arg2 in ("завтра", "tomorrow"):
-        day_type = "tomorrow"
-    elif arg2 in ("сегодня", "today"):
-        day_type = "today"
+    elif data.startswith("sub_time:"):
+        t = data[len("sub_time:"):]
+        entry["time"] = t
+        entry["chat_id"] = chat.id
+
+    elif data == "sub_back":
+        pass  # просто перерисуем экран
+
+    # Если обе подписки выключены — удаляем запись
+    if not entry.get("notify_daily") and not entry.get("notify_changes"):
+        subscriptions.pop(uid, None)
+        if scheduler is not None:
+            try:
+                scheduler.remove_job(_job_id_for(user.id))
+            except Exception:
+                pass
     else:
-        await update.message.reply_text(
-            "Второй параметр должен быть «сегодня» или «завтра».\n"
-            "Пример: /subscribe 07:30 завтра"
-        )
-        return
+        subscriptions[uid] = entry
+        if entry.get("notify_daily"):
+            _reschedule_user(user.id)
+        else:
+            if scheduler is not None:
+                try:
+                    scheduler.remove_job(_job_id_for(user.id))
+                except Exception:
+                    pass
 
-    user = update.effective_user
-    chat = update.effective_chat
-    if not user or not chat:
-        await update.message.reply_text("Не удалось определить пользователя/чат.")
-        return
-
-    subscriptions[str(user.id)] = {"chat_id": chat.id, "time": t, "day_type": day_type}
     _save_subscriptions_to_disk()
-    _reschedule_user(user.id)
-
-    day_label = "завтра" if day_type == "tomorrow" else "сегодня"
-    await update.message.reply_text(
-        f"Ок! Буду присылать расписание на {day_label} каждый день в {t}."
-    )
-
-
-async def subscribe_time_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатия кнопки выбора времени при подписке."""
-    query = update.callback_query
-    await query.answer()
-    _log_user(update, "subscribe_time_callback")
-
-    data = query.data or ""
-    # формат: subtime:HH:MM
-    parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "subtime":
-        await query.edit_message_text("Что-то пошло не так. Попробуй ещё раз: /subscribe")
-        return
-
-    t = f"{parts[1]}:{parts[2]}"
-
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("📅 На сегодня", callback_data=f"subscribe:{parts[1]}:{parts[2]}:today"),
-                InlineKeyboardButton("📅 На завтра", callback_data=f"subscribe:{parts[1]}:{parts[2]}:tomorrow"),
-            ]
-        ]
-    )
-
+    entry = subscriptions.get(uid)
     await query.edit_message_text(
-        f"Время {t} выбрано. Какое расписание присылать?",
-        reply_markup=keyboard,
+        _sub_text(entry),
+        reply_markup=_sub_keyboard(entry),
     )
 
 
-async def subscribe_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка нажатия кнопки сегодня/завтра при подписке."""
-    query = update.callback_query
-    await query.answer()
-    _log_user(update, "subscribe_callback")
-
-    data = query.data or ""
-    # формат: subscribe:HH:MM:today|tomorrow
-    parts = data.split(":")
-    if len(parts) != 4 or parts[0] != "subscribe":
-        await query.edit_message_text("Что-то пошло не так. Попробуй ещё раз: /subscribe")
-        return
-
-    t = f"{parts[1]}:{parts[2]}"
-    day_type = parts[3]
-
-    user = update.effective_user
-    chat = update.effective_chat
-    if not user or not chat:
-        await query.edit_message_text("Не удалось определить пользователя/чат.")
-        return
-
-    subscriptions[str(user.id)] = {"chat_id": chat.id, "time": t, "day_type": day_type}
-    _save_subscriptions_to_disk()
-    _reschedule_user(user.id)
-
-    day_label = "завтра" if day_type == "tomorrow" else "сегодня"
-    logger.info(f"USER id={user.id} subscribed: time={t} day_type={day_type}")
-    await query.edit_message_text(
-        f"✅ Готово! Буду присылать расписание на {day_label} каждый день в {t}."
-    )
+# subscribe_time_callback и subscribe_callback объединены в subscribe_manage_callback
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -1379,7 +1403,10 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
             scheduler.remove_job(_job_id_for(user.id))
         except Exception:
             pass
-    await update.message.reply_text("Готово. Напоминания отключены.")
+    await update.message.reply_text(
+        "Все подписки отключены.\n"
+        "Чтобы настроить заново — /subscribe"
+    )
 
 
 async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2217,8 +2244,7 @@ bot_app.add_handler(CommandHandler("app", open_app))
 bot_app.add_handler(CommandHandler("subscribe", subscribe))
 bot_app.add_handler(CommandHandler("unsubscribe", unsubscribe))
 bot_app.add_handler(CommandHandler("chatid", chatid_command))
-bot_app.add_handler(CallbackQueryHandler(subscribe_time_callback, pattern=r"^subtime:"))
-bot_app.add_handler(CallbackQueryHandler(subscribe_callback, pattern=r"^subscribe:"))
+bot_app.add_handler(CallbackQueryHandler(subscribe_manage_callback, pattern=r"^sub_"))
 
 edit_conv = ConversationHandler(
     entry_points=[CommandHandler("edit_schedule", edit_schedule_start)],
@@ -3331,34 +3357,50 @@ WEBAPP_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card hidden" id="sub-card">
-    <!-- Статус подписки -->
-    <div id="sub-status-block" class="sub-status-block">
-      <div class="sub-status-left">
-        <span id="sub-status-icon" class="sub-status-icon">🔕</span>
+    <!-- Чекбоксы подписок -->
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;">
+      <!-- Ежедневное расписание -->
+      <div id="sub-daily-card" style="border-radius:14px;border:1.5px solid rgba(0,0,0,0.08);padding:14px;background:var(--tg-theme-secondary-bg-color,#f5f5f5);cursor:pointer;" onclick="toggleDaily()">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div id="sub-daily-toggle" style="width:44px;height:26px;border-radius:13px;background:#ccc;position:relative;flex-shrink:0;transition:background 0.2s;">
+            <div style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 4px rgba(0,0,0,0.18);" id="sub-daily-knob"></div>
+          </div>
+          <div>
+            <div style="font-size:14px;font-weight:700;">📅 Ежедневное расписание</div>
+            <div id="sub-daily-desc" style="font-size:12px;color:var(--tg-theme-hint-color,#888);margin-top:2px;">Выключено</div>
+          </div>
+        </div>
+        <!-- Настройки времени — показываются когда включено -->
+        <div id="sub-daily-settings" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,0.07);" onclick="event.stopPropagation()">
+          <div style="display:flex;gap:10px;">
+            <div class="sub-field">
+              <label class="sub-label">Время</label>
+              <input id="sub-time" type="time" class="sub-input" />
+            </div>
+            <div class="sub-field">
+              <label class="sub-label">Расписание на</label>
+              <select id="sub-day-type" class="sub-input">
+                <option value="today">Сегодня</option>
+                <option value="tomorrow">Завтра</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="sub-status-right">
-        <div class="sub-status-title">Уведомления о расписании</div>
-        <div id="sub-info" class="sub-status-text">Загрузка...</div>
+      <!-- Уведомления об изменениях -->
+      <div id="sub-changes-card" style="border-radius:14px;border:1.5px solid rgba(0,0,0,0.08);padding:14px;background:var(--tg-theme-secondary-bg-color,#f5f5f5);cursor:pointer;" onclick="toggleChanges()">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div id="sub-changes-toggle" style="width:44px;height:26px;border-radius:13px;background:#ccc;position:relative;flex-shrink:0;transition:background 0.2s;">
+            <div style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 4px rgba(0,0,0,0.18);" id="sub-changes-knob"></div>
+          </div>
+          <div>
+            <div style="font-size:14px;font-weight:700;">🔔 Изменения расписания</div>
+            <div style="font-size:12px;color:var(--tg-theme-hint-color,#888);margin-top:2px;">Уведомление при обновлении</div>
+          </div>
+        </div>
       </div>
     </div>
-    <!-- Настройки -->
-    <div class="sub-settings">
-      <div class="sub-field">
-        <label class="sub-label">Время отправки</label>
-        <input id="sub-time" type="time" class="sub-input" />
-      </div>
-      <div class="sub-field">
-        <label class="sub-label">Расписание на</label>
-        <select id="sub-day-type" class="sub-input">
-          <option value="today">Сегодня</option>
-          <option value="tomorrow">Завтра</option>
-        </select>
-      </div>
-    </div>
-    <div class="sub-actions">
-      <button id="sub-save" class="sub-btn-save">🔔 Сохранить</button>
-      <button id="sub-remove" class="sub-btn-remove">Отключить</button>
-    </div>
+    <button id="sub-save" class="sub-btn-save">Сохранить настройки</button>
 
     <!-- Групповые подписки — только для админов -->
     <div id="sub-group-section" class="hidden">
@@ -3435,6 +3477,15 @@ WEBAPP_HTML = """<!DOCTYPE html>
           </select>
         </div>
       </div>
+      <!-- Выбор профиля субботы — показывается только когда выбрана Суббота -->
+      <div id="admin-sat-profile-bar" style="display:none;padding:8px 12px;border-bottom:1px solid rgba(0,0,0,0.08);background:var(--tg-theme-secondary-bg-color,#f5f5f5);gap:6px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:12px;color:var(--tg-theme-hint-color,#888);flex-shrink:0;">Профиль:</span>
+        <button class="sched-chip sat-prof-btn active" data-profile="Физмат">Физмат</button>
+        <button class="sched-chip sat-prof-btn" data-profile="Биохим">Биохим</button>
+        <button class="sched-chip sat-prof-btn" data-profile="Инфотех_1">Инфотех 1</button>
+        <button class="sched-chip sat-prof-btn" data-profile="Инфотех_2">Инфотех 2</button>
+        <button class="sched-chip sat-prof-btn" data-profile="Общеобразовательный_3">Общеобр. 3</button>
+      </div>
       <div class="editor-scroll">
         <div id="admin-lesson-rows"></div>
       </div>
@@ -3466,10 +3517,6 @@ WEBAPP_HTML = """<!DOCTYPE html>
     const statusEl = document.getElementById('status');
     const scheduleBox = document.getElementById('schedule-box');
     const subInfo = document.getElementById('sub-info');
-    const subTime = document.getElementById('sub-time');
-    const subDayType = document.getElementById('sub-day-type');
-    const subSave = document.getElementById('sub-save');
-    const subRemove = document.getElementById('sub-remove');
     const adminCard = document.getElementById('admin-card');
     const adminModeButtons = document.getElementById('admin-mode-buttons');
     const adminDayEditor = document.getElementById('admin-day-editor');
@@ -3653,11 +3700,41 @@ WEBAPP_HTML = """<!DOCTYPE html>
       renumberLessonRows();
     }
 
+    let currentSatProfile = 'Физмат';
+
+    function updateSatProfileBar() {
+      const bar = document.getElementById('admin-sat-profile-bar');
+      if (!bar) return;
+      if (adminDaySelect.value === 'Суббота') {
+        bar.style.display = 'flex';
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+
+    // Переключение профилей субботы
+    document.querySelectorAll('.sat-prof-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        currentSatProfile = btn.getAttribute('data-profile');
+        document.querySelectorAll('.sat-prof-btn').forEach(b =>
+          b.classList.toggle('active', b === btn));
+        await reloadAdminDay();
+      });
+    });
+
     async function reloadAdminDay() {
-      const day = adminDaySelect.value;
+      const day  = adminDaySelect.value;
       const date = adminDayDate.value || null;
-      const data = await api('/api/admin/day_get', { day, mode: adminType, date });
-      fillLessonRowsFromLines(data.lessons || []);
+      updateSatProfileBar();
+      if (day === 'Суббота') {
+        const data = await api('/api/admin/sat_profile_get',
+          { profile: currentSatProfile, mode: adminType, date });
+        fillLessonRowsFromLines(data.lessons || []);
+      } else {
+        const data = await api('/api/admin/day_get', { day, mode: adminType, date });
+        fillLessonRowsFromLines(data.lessons || []);
+      }
     }
 
     const tabBtnSchedule = document.getElementById('tab-btn-schedule');
@@ -3711,17 +3788,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
     async function loadMe() {
       setStatus('Загрузка данных пользователя...');
       const data = await api('/api/me', {});
-      const subIcon = document.getElementById('sub-status-icon');
-      if (data.subscription) {
-        const dayLabel = data.subscription.day_type === 'tomorrow' ? 'завтра' : 'сегодня';
-        subInfo.textContent = 'Уведомление каждый день в ' + data.subscription.time + ' — расписание на ' + dayLabel;
-        if (subIcon) subIcon.textContent = '🔔';
-        subTime.value = data.subscription.time;
-        subDayType.value = data.subscription.day_type || 'today';
-      } else {
-        subInfo.textContent = 'Подписка не настроена. Выбери время и нажми «Сохранить».';
-        if (subIcon) subIcon.textContent = '🔕';
-      }
+      renderSubState(data.subscription || null);
       isAdmin = !!data.is_admin;
       isSuperAdmin = !!data.is_superadmin;
       // Управление видимостью: кнопка «Суббота» всегда в ряду с «Основное»
@@ -3759,24 +3826,79 @@ WEBAPP_HTML = """<!DOCTYPE html>
       });
     }
 
-    async function saveSubscription() {
-      const time = subTime.value;
-      const dayType = subDayType.value;
-      if (!time) {
-        setStatus('Укажи время в формате HH:MM', true);
-        return;
+    // ── Состояние тоглов подписки ──────────────────────────────────────────
+    let subDailyOn = false;
+    let subChangesOn = false;
+
+    function setToggle(toggleEl, knobEl, on) {
+      toggleEl.style.background = on ? 'linear-gradient(135deg,#4e8cff,#8f6bff)' : '#ccc';
+      knobEl.style.left = on ? '21px' : '3px';
+    }
+
+    function renderSubState(sub) {
+      subDailyOn   = !!(sub && sub.notify_daily);
+      subChangesOn = !!(sub && sub.notify_changes);
+
+      const dailyToggle  = document.getElementById('sub-daily-toggle');
+      const dailyKnob    = document.getElementById('sub-daily-knob');
+      const changesToggle= document.getElementById('sub-changes-toggle');
+      const changesKnob  = document.getElementById('sub-changes-knob');
+      const dailySettings= document.getElementById('sub-daily-settings');
+      const dailyDesc    = document.getElementById('sub-daily-desc');
+      const subTime      = document.getElementById('sub-time');
+      const subDayType   = document.getElementById('sub-day-type');
+
+      setToggle(dailyToggle, dailyKnob, subDailyOn);
+      setToggle(changesToggle, changesKnob, subChangesOn);
+
+      dailySettings.style.display = subDailyOn ? 'block' : 'none';
+
+      if (subDailyOn && sub) {
+        const dl = sub.day_type === 'tomorrow' ? 'завтра' : 'сегодня';
+        dailyDesc.textContent = 'Каждый день в ' + sub.time + ' — ' + dl;
+        if (subTime) subTime.value = sub.time || '07:00';
+        if (subDayType) subDayType.value = sub.day_type || 'today';
+      } else {
+        dailyDesc.textContent = 'Выключено';
+        if (!subTime.value) subTime.value = '07:00';
       }
-      setStatus('Сохранение подписки...');
-      await api('/api/subscribe', { time, day_type: dayType });
-      setStatus('Подписка сохранена');
-      await loadMe();
+    }
+
+    function toggleDaily() {
+      subDailyOn = !subDailyOn;
+      const sub = { notify_daily: subDailyOn, notify_changes: subChangesOn,
+                    time: document.getElementById('sub-time').value || '07:00',
+                    day_type: document.getElementById('sub-day-type').value || 'today' };
+      renderSubState(sub);
+    }
+
+    function toggleChanges() {
+      subChangesOn = !subChangesOn;
+      const sub = { notify_daily: subDailyOn, notify_changes: subChangesOn,
+                    time: document.getElementById('sub-time').value || '07:00',
+                    day_type: document.getElementById('sub-day-type').value || 'today' };
+      renderSubState(sub);
+    }
+
+    async function saveSubscription() {
+      const time    = document.getElementById('sub-time').value || '07:00';
+      const dayType = document.getElementById('sub-day-type').value || 'today';
+      setStatus('Сохранение подписок...');
+      const res = await api('/api/subscribe', {
+        notify_daily: subDailyOn, notify_changes: subChangesOn,
+        time, day_type: dayType
+      });
+      setStatus(subDailyOn || subChangesOn ? 'Подписки сохранены' : 'Подписки отключены');
+      renderSubState(res.subscription || null);
     }
 
     async function removeSubscription() {
-      setStatus('Отключение подписки...');
+      setStatus('Отключение подписок...');
       await api('/api/unsubscribe', {});
-      setStatus('Подписка отключена');
-      await loadMe();
+      subDailyOn = false;
+      subChangesOn = false;
+      renderSubState(null);
+      setStatus('Подписки отключены');
     }
 
     async function saveAdminWeek() {
@@ -3786,40 +3908,39 @@ WEBAPP_HTML = """<!DOCTYPE html>
       setStatus('Расписание обновлено');
     }
 
-    async function saveAdminDay() {
-      const day = adminDaySelect.value;
-      const date = adminDayDate.value || null;
-      // собираем строки занятий из фиксированных слотов
-      const lines = [];
+    function collectLessonsText() {
       const rows = Array.from(adminLessonRows.querySelectorAll('.lesson-entry'));
       const parsed = [];
       rows.forEach((row) => {
-        const subjInput = row.querySelector('.lesson-subject');
-        const roomInput = row.querySelector('.lesson-room');
-        const startInput = row.querySelector('.lesson-start');
-        const endInput = row.querySelector('.lesson-end');
-        const subject = (subjInput.value || '').trim();
-        const room = (roomInput.value || '').trim();
-        const start = (startInput && startInput.value) || '';
-        const end = (endInput && endInput.value) || '';
-        if (!subject) {
-          return;
-        }
+        const subject = (row.querySelector('.lesson-subject').value || '').trim();
+        const room    = (row.querySelector('.lesson-room').value   || '').trim();
+        const start   = (row.querySelector('.lesson-start').value  || '');
+        const end     = (row.querySelector('.lesson-end').value    || '');
+        if (!subject) return;
         const roomPart = room ? '/' + room : '';
-        parsed.push({
-          start,
-          end,
-          line: `${start || ''}-${end || ''} ${subject}${roomPart}`.trim(),
-        });
+        parsed.push({ start, line: `${start}-${end} ${subject}${roomPart}`.trim() });
       });
-      parsed
-        .filter((p) => p.start)
-        .sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0))
-        .forEach((p) => lines.push(p.line));
-      const text = lines.join('\\n');
+      return parsed
+        .filter(p => p.start)
+        .sort((a,b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0)
+        .map(p => p.line)
+        .join('\\n');
+    }
+
+    async function saveAdminDay() {
+      const day  = adminDaySelect.value;
+      const date = adminDayDate.value || null;
+      const text = collectLessonsText();
       setStatus('Сохранение расписания дня...');
-      await api('/api/admin/day', { day, lessons_text: text, mode: adminType, date });
-      setStatus('Расписание дня обновлено');
+      if (day === 'Суббота') {
+        await api('/api/admin/sat_profile', {
+          profile: currentSatProfile, lessons_text: text, mode: adminType, date
+        });
+        setStatus('Профиль субботы обновлён');
+      } else {
+        await api('/api/admin/day', { day, lessons_text: text, mode: adminType, date });
+        setStatus('Расписание дня обновлено');
+      }
     }
 
     document.querySelectorAll('button[data-type]').forEach((btn) => {
@@ -3828,8 +3949,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
         loadSchedule(t);
       });
     });
-    subSave.addEventListener('click', saveSubscription);
-    subRemove.addEventListener('click', removeSubscription);
+    document.getElementById('sub-save').addEventListener('click', saveSubscription);
 
     // ── Групповые подписки (только для админов) ──
     async function loadGroupSubscriptions() {
@@ -3962,13 +4082,13 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.add('hidden');
       adminWeekEditor.classList.add('hidden');
       adminDayEditor.classList.remove('hidden');
-      // В режиме temp подставляем сегодняшнюю дату если поле пустое
       if (adminType === 'temp' && !adminDayDate.value) {
         const today = new Date();
         adminDayDate.value = today.toISOString().split('T')[0];
         const ruDays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
         adminDaySelect.value = ruDays[today.getDay()];
       }
+      updateSatProfileBar();
       reloadAdminDay();
     });
     document.getElementById('admin-mode-week').addEventListener('click', () => {
@@ -3981,7 +4101,7 @@ WEBAPP_HTML = """<!DOCTYPE html>
       adminModeButtons.classList.remove('hidden');
     });
     adminDaySelect.addEventListener('change', () => {
-      // В режиме temp — синхронизируем дату с выбранным днём недели
+      updateSatProfileBar();
       if (adminType === 'temp') {
         const ruDays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
         const targetIdx = ruDays.indexOf(adminDaySelect.value);
@@ -4105,25 +4225,46 @@ async def api_subscribe(request: Request):
     if isinstance(raw_user, dict) and "id" in raw_user:
         user = raw_user
     else:
-        init_data = data.get("init_data", "")
-        user = _get_user_from_init_data(init_data)
+        user = _get_user_from_init_data(data.get("init_data", ""))
     if not user:
         return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
     user_id = int(user["id"])
-    time_str = data.get("time", "")
-    parsed = _parse_hhmm(time_str)
-    if not parsed:
-        return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
-    hh, mm = parsed
-    t = f"{hh:02d}:{mm:02d}"
-    day_type = data.get("day_type", "today")
-    if day_type not in {"today", "tomorrow"}:
-        day_type = "today"
-    chat_id = user_id
-    subscriptions[str(user_id)] = {"chat_id": chat_id, "time": t, "day_type": day_type}
+    uid = str(user_id)
+
+    notify_daily   = bool(data.get("notify_daily", False))
+    notify_changes = bool(data.get("notify_changes", False))
+
+    entry = dict(subscriptions.get(uid) or {})
+    entry["chat_id"]        = user_id
+    entry["notify_daily"]   = notify_daily
+    entry["notify_changes"] = notify_changes
+
+    if notify_daily:
+        time_str = data.get("time", entry.get("time", "07:00"))
+        parsed = _parse_hhmm(time_str)
+        if not parsed:
+            return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
+        hh, mm = parsed
+        entry["time"] = f"{hh:02d}:{mm:02d}"
+        day_type = data.get("day_type", entry.get("day_type", "today"))
+        entry["day_type"] = day_type if day_type in {"today", "tomorrow"} else "today"
+
+    if not notify_daily and not notify_changes:
+        subscriptions.pop(uid, None)
+        if scheduler is not None:
+            try: scheduler.remove_job(_job_id_for(user_id))
+            except Exception: pass
+    else:
+        subscriptions[uid] = entry
+        if notify_daily:
+            _reschedule_user(user_id)
+        else:
+            if scheduler is not None:
+                try: scheduler.remove_job(_job_id_for(user_id))
+                except Exception: pass
+
     _save_subscriptions_to_disk()
-    _reschedule_user(user_id)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "subscription": subscriptions.get(uid)})
 
 
 @app.post("/api/unsubscribe")
@@ -4267,6 +4408,110 @@ async def api_admin_day(request: Request):
         msg = "📢 Обновлено расписание:\n\n" + _format_day_table_html(day, lessons)
         asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
 
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/admin/sat_profile_get")
+async def api_admin_sat_profile_get(request: Request):
+    """Возвращает уроки одного профиля субботы."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        user = _get_user_from_init_data(data.get("init_data", ""))
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    if not _is_admin_user_id(int(user["id"])):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    profile_key = (data.get("profile") or "").strip()
+    mode = (data.get("mode") or "base").strip()
+    date_str = (data.get("date") or "").strip()
+
+    lessons: list[str] = []
+    if mode == "temp" and date_str:
+        try:
+            d = datetime.fromisoformat(date_str).date()
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "bad_date"}, status_code=400)
+        raw = temp_schedule.get(d.isoformat())
+        if isinstance(raw, dict):
+            lessons = raw.get(profile_key, [])
+        if not lessons:
+            sat = schedule.get("Суббота")
+            if isinstance(sat, dict):
+                lessons = sat.get(profile_key, [])
+    else:
+        sat = schedule.get("Суббота")
+        if isinstance(sat, dict):
+            lessons = sat.get(profile_key, [])
+
+    return JSONResponse({"ok": True, "lessons": lessons})
+
+
+@app.post("/api/admin/sat_profile")
+async def api_admin_sat_profile(request: Request):
+    """Сохраняет уроки одного профиля субботы."""
+    data = await request.json()
+    raw_user = data.get("user")
+    user = None
+    if isinstance(raw_user, dict) and "id" in raw_user:
+        user = raw_user
+    else:
+        user = _get_user_from_init_data(data.get("init_data", ""))
+    if not user:
+        return JSONResponse({"ok": False, "error": "bad_init_data"}, status_code=400)
+    user_id = int(user["id"])
+    if not _is_admin_user_id(user_id):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    profile_key = (data.get("profile") or "").strip()
+    if profile_key not in SATURDAY_PROFILE_KEYS:
+        return JSONResponse({"ok": False, "error": "bad_profile"}, status_code=400)
+
+    mode = (data.get("mode") or "base").strip()
+    lessons_text = data.get("lessons_text", "") or ""
+    lessons = _parse_lessons_from_text(lessons_text)
+    if lessons is None:
+        return JSONResponse({"ok": False, "error": "bad_format"}, status_code=400)
+
+    label = SATURDAY_PROFILE_LABELS.get(profile_key, profile_key)
+
+    if mode == "temp":
+        date_str = (data.get("date") or "").strip()
+        if not date_str:
+            return JSONResponse({"ok": False, "error": "date_required"}, status_code=400)
+        try:
+            d = datetime.fromisoformat(date_str).date()
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "bad_date"}, status_code=400)
+        key = d.isoformat()
+        existing = temp_schedule.get(key)
+        if isinstance(existing, dict):
+            existing[profile_key] = lessons
+        else:
+            # Инициализируем все профили из основного расписания
+            sat_base = schedule.get("Суббота")
+            base_dict = sat_base if isinstance(sat_base, dict) else {}
+            new_dict = {pk: list(base_dict.get(pk, [])) for pk in SATURDAY_PROFILE_KEYS}
+            new_dict[profile_key] = lessons
+            temp_schedule[key] = new_dict
+        _save_temp_schedule_to_disk()
+        msg = f"📢 Временное расписание субботы ({d.strftime('%d.%m.%Y')}) — {label} обновлено:\n\n"
+        msg += _format_day_table_html(label, lessons)
+    else:
+        sat = schedule.get("Суббота")
+        if not isinstance(sat, dict):
+            sat = {}
+        sat[profile_key] = lessons
+        schedule["Суббота"] = sat
+        _save_schedule_to_disk()
+        msg = f"📢 Расписание субботы — {label} обновлено:\n\n"
+        msg += _format_day_table_html(label, lessons)
+
+    asyncio.create_task(_notify_subscribers(_truncate_message(msg)))
     return JSONResponse({"ok": True})
 
 
