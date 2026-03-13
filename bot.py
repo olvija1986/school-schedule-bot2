@@ -149,7 +149,10 @@ def _gs_load_temp_schedule() -> dict | None:
         return None
 
 def _gs_load_subscriptions() -> dict | None:
-    """Загружает подписки из листа subscriptions."""
+    """Загружает подписки из листа subscriptions.
+    Формат строки: chat_id | time | day_type | notify_daily | notify_changes
+    Старые строки без последних двух колонок читаются как notify_daily=True, notify_changes=False.
+    """
     try:
         ws = _gs_sheet("subscriptions")
         if ws is None:
@@ -159,16 +162,24 @@ def _gs_load_subscriptions() -> dict | None:
             return {}
         result = {}
         for row in rows:
-            if len(row) < 3 or not row[0].strip():
+            if not row or not row[0].strip():
                 continue
             chat_id_str = row[0].strip()
-            time_str    = row[1].strip()
-            day_type    = row[2].strip() or "today"
             try:
                 chat_id = int(chat_id_str)
             except ValueError:
                 continue
-            result[chat_id_str] = {"chat_id": chat_id, "time": time_str, "day_type": day_type}
+            time_str       = row[1].strip() if len(row) > 1 else ""
+            day_type       = row[2].strip() or "today" if len(row) > 2 else "today"
+            notify_daily   = (row[3].strip().lower() not in ("false", "0", "нет")) if len(row) > 3 else True
+            notify_changes = (row[4].strip().lower() in ("true", "1", "да"))        if len(row) > 4 else False
+            result[chat_id_str] = {
+                "chat_id":        chat_id,
+                "time":           time_str,
+                "day_type":       day_type,
+                "notify_daily":   notify_daily,
+                "notify_changes": notify_changes,
+            }
         return result
     except Exception as e:
         logger.error(f"_gs_load_subscriptions error: {e}")
@@ -205,13 +216,23 @@ def _gs_save_temp_schedule() -> None:
         logger.error(f"_gs_save_temp_schedule error: {e}")
 
 def _gs_save_subscriptions() -> None:
-    """Сохраняет подписки в лист subscriptions."""
+    """Сохраняет подписки в лист subscriptions.
+    Формат: chat_id | time | day_type | notify_daily | notify_changes
+    """
     try:
         ws = _gs_sheet("subscriptions")
         if ws is None:
             return
-        rows = [[str(entry["chat_id"]), entry.get("time",""), entry.get("day_type","today")]
-                for entry in subscriptions.values()]
+        rows = [
+            [
+                str(entry["chat_id"]),
+                entry.get("time", ""),
+                entry.get("day_type", "today"),
+                "true" if entry.get("notify_daily", True)   else "false",
+                "true" if entry.get("notify_changes", False) else "false",
+            ]
+            for entry in subscriptions.values()
+        ]
         ws.clear()
         if rows:
             ws.update(rows, value_input_option="RAW")
