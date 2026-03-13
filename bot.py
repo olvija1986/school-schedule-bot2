@@ -3416,20 +3416,45 @@ WEBAPP_HTML = """<!DOCTYPE html>
       </div>
       <div class="sub-group-form">
         <div class="sub-group-inputs">
-          <div class="sub-field">
+          <div class="sub-field" style="flex:2 1 0;">
             <label class="sub-label">Chat ID группы</label>
             <input id="sub-group-chatid" type="text" class="sub-input" placeholder="-100123456789" />
           </div>
-          <div class="sub-field">
-            <label class="sub-label">Время</label>
-            <input id="sub-group-time" type="time" class="sub-input" />
+        </div>
+        <!-- Чекбоксы типа подписки -->
+        <div style="display:flex;flex-direction:column;gap:8px;margin:4px 0;">
+          <!-- Ежедневное -->
+          <div style="border-radius:12px;border:1.5px solid rgba(0,0,0,0.08);padding:12px;background:var(--tg-theme-secondary-bg-color,#f5f5f5);cursor:pointer;" onclick="toggleGroupDaily()">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div id="grp-daily-toggle" style="width:40px;height:24px;border-radius:12px;background:#ccc;position:relative;flex-shrink:0;transition:background 0.2s;">
+                <div id="grp-daily-knob" style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.2);"></div>
+              </div>
+              <div style="font-size:13px;font-weight:700;">📅 Ежедневное расписание</div>
+            </div>
+            <div id="grp-daily-settings" style="display:none;margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.07);" onclick="event.stopPropagation()">
+              <div style="display:flex;gap:8px;">
+                <div class="sub-field">
+                  <label class="sub-label">Время</label>
+                  <input id="sub-group-time" type="time" class="sub-input" />
+                </div>
+                <div class="sub-field">
+                  <label class="sub-label">На</label>
+                  <select id="sub-group-daytype" class="sub-input">
+                    <option value="today">Сегодня</option>
+                    <option value="tomorrow">Завтра</option>
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="sub-field">
-            <label class="sub-label">На</label>
-            <select id="sub-group-daytype" class="sub-input">
-              <option value="today">Сегодня</option>
-              <option value="tomorrow">Завтра</option>
-            </select>
+          <!-- Изменения -->
+          <div style="border-radius:12px;border:1.5px solid rgba(0,0,0,0.08);padding:12px;background:var(--tg-theme-secondary-bg-color,#f5f5f5);cursor:pointer;" onclick="toggleGroupChanges()">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div id="grp-changes-toggle" style="width:40px;height:24px;border-radius:12px;background:#ccc;position:relative;flex-shrink:0;transition:background 0.2s;">
+                <div id="grp-changes-knob" style="position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left 0.2s;box-shadow:0 1px 3px rgba(0,0,0,0.2);"></div>
+              </div>
+              <div style="font-size:13px;font-weight:700;">🔔 Изменения расписания</div>
+            </div>
           </div>
         </div>
         <button id="sub-group-save" style="width:100%;">➕ Добавить подписку для группы</button>
@@ -3958,6 +3983,27 @@ WEBAPP_HTML = """<!DOCTYPE html>
     document.getElementById('sub-save').addEventListener('click', saveSubscription);
 
     // ── Групповые подписки (только для админов) ──
+    let grpDailyOn = false;
+    let grpChangesOn = false;
+
+    function toggleGroupDaily() {
+      grpDailyOn = !grpDailyOn;
+      const t = document.getElementById('grp-daily-toggle');
+      const k = document.getElementById('grp-daily-knob');
+      const s = document.getElementById('grp-daily-settings');
+      t.style.background = grpDailyOn ? 'linear-gradient(135deg,#4e8cff,#8f6bff)' : '#ccc';
+      k.style.left = grpDailyOn ? '18px' : '2px';
+      s.style.display = grpDailyOn ? 'block' : 'none';
+    }
+
+    function toggleGroupChanges() {
+      grpChangesOn = !grpChangesOn;
+      const t = document.getElementById('grp-changes-toggle');
+      const k = document.getElementById('grp-changes-knob');
+      t.style.background = grpChangesOn ? 'linear-gradient(135deg,#4e8cff,#8f6bff)' : '#ccc';
+      k.style.left = grpChangesOn ? '18px' : '2px';
+    }
+
     async function loadGroupSubscriptions() {
       const section = document.getElementById('sub-group-section');
       if (!section) return;
@@ -3972,13 +4018,16 @@ WEBAPP_HTML = """<!DOCTYPE html>
           return;
         }
         data.subscriptions.forEach(sub => {
-          const dayLabel = sub.day_type === 'tomorrow' ? 'завтра' : 'сегодня';
+          const tags = [];
+          if (sub.notify_daily)   tags.push('📅 ' + sub.time + ' · ' + (sub.day_type === 'tomorrow' ? 'завтра' : 'сегодня'));
+          if (sub.notify_changes) tags.push('🔔 изменения');
+          if (!tags.length)       tags.push('—');
           const item = document.createElement('div');
           item.className = 'sub-group-item';
           item.innerHTML =
             '<div class="sub-group-item-info">' +
               '<div class="sub-group-item-id">ID: ' + sub.chat_id + '</div>' +
-              '<div class="sub-group-item-time">\u23f0 ' + sub.time + ' \u00b7 ' + dayLabel + '</div>' +
+              '<div class="sub-group-item-time">' + tags.join(' &nbsp;·&nbsp; ') + '</div>' +
             '</div>' +
             '<button class="sub-group-item-del">\u2715</button>';
           item.querySelector('.sub-group-item-del').addEventListener('click', async () => {
@@ -3995,17 +4044,22 @@ WEBAPP_HTML = """<!DOCTYPE html>
     }
 
     document.getElementById('sub-group-save').addEventListener('click', async () => {
-      const chatIdInput = document.getElementById('sub-group-chatid');
-      const timeInput   = document.getElementById('sub-group-time');
+      const chatIdInput  = document.getElementById('sub-group-chatid');
+      const timeInput    = document.getElementById('sub-group-time');
       const dayTypeInput = document.getElementById('sub-group-daytype');
       const chatId = (chatIdInput.value || '').trim();
-      const time   = timeInput.value;
-      const dayType = dayTypeInput.value;
       if (!chatId) { setStatus('Укажи Chat ID группы', true); return; }
-      if (!time)   { setStatus('Укажи время', true); return; }
       if (!/^-?\d+$/.test(chatId)) { setStatus('Chat ID должен быть числом, например -100123456789', true); return; }
+      if (!grpDailyOn && !grpChangesOn) { setStatus('Выбери хотя бы один тип уведомлений', true); return; }
+      if (grpDailyOn && !timeInput.value) { setStatus('Укажи время для ежедневных уведомлений', true); return; }
       try {
-        await api('/api/admin/subscribe_chat', { chat_id: chatId, time, day_type: dayType });
+        await api('/api/admin/subscribe_chat', {
+          chat_id: chatId,
+          notify_daily:   grpDailyOn,
+          notify_changes: grpChangesOn,
+          time:     timeInput.value || '07:00',
+          day_type: dayTypeInput.value || 'today',
+        });
         chatIdInput.value = '';
         setStatus('Подписка для группы добавлена');
         await loadGroupSubscriptions();
@@ -4678,21 +4732,31 @@ async def api_admin_subscribe_chat(request: Request):
         return JSONResponse({"ok": False, "error": "bad_chat_id"}, status_code=400)
     chat_id = int(chat_id_raw)
 
-    time_str = data.get("time", "")
-    parsed = _parse_hhmm(time_str)
-    if not parsed:
-        return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
-    hh, mm = parsed
-    t = f"{hh:02d}:{mm:02d}"
+    notify_daily   = bool(data.get("notify_daily", True))
+    notify_changes = bool(data.get("notify_changes", False))
 
-    day_type = data.get("day_type", "today")
-    if day_type not in {"today", "tomorrow"}:
-        day_type = "today"
+    entry: dict = {"chat_id": chat_id, "notify_daily": notify_daily, "notify_changes": notify_changes}
 
-    sub_key = str(chat_id)
-    subscriptions[sub_key] = {"chat_id": chat_id, "time": t, "day_type": day_type}
+    if notify_daily:
+        time_str = data.get("time", "07:00")
+        parsed = _parse_hhmm(time_str)
+        if not parsed:
+            return JSONResponse({"ok": False, "error": "bad_time"}, status_code=400)
+        hh, mm = parsed
+        entry["time"] = f"{hh:02d}:{mm:02d}"
+        day_type = data.get("day_type", "today")
+        entry["day_type"] = day_type if day_type in {"today", "tomorrow"} else "today"
+
+    subscriptions[str(chat_id)] = entry
     _save_subscriptions_to_disk()
-    _reschedule_user(chat_id)
+    if notify_daily:
+        _reschedule_user(chat_id)
+    else:
+        if scheduler is not None:
+            try:
+                scheduler.remove_job(_job_id_for(chat_id))
+            except Exception:
+                pass
     return JSONResponse({"ok": True})
 
 
@@ -4719,8 +4783,10 @@ async def api_admin_subscriptions_list(request: Request):
         if cid is not None and int(cid) != user_id:
             result.append({
                 "chat_id": cid,
-                "time": entry.get("time", ""),
-                "day_type": entry.get("day_type", "today"),
+                "time":           entry.get("time", ""),
+                "day_type":       entry.get("day_type", "today"),
+                "notify_daily":   entry.get("notify_daily", True),
+                "notify_changes": entry.get("notify_changes", False),
             })
     return JSONResponse({"ok": True, "subscriptions": result})
 
