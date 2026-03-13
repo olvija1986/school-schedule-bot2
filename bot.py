@@ -699,15 +699,21 @@ async def _send_daily_reminder(chat_id: int, day_type: str = "today"):
     day_ru = DAY_MAP.get(day_eng, day_eng)
     date_label = "сегодня" if day_type == "today" else "завтра"
 
+    if day_ru == "Воскресенье":
+        return  # В воскресенье уроков нет — не отправляем
+
     if day_ru == "Суббота":
         profiles = _get_saturday_profiles_for_date(target_date)
-        if profiles:
-            parts = [_format_day_table_html(f"Суббота — {label}", lessons) for label, lessons in profiles]
-            text = _truncate_message(f"📅 Расписание на {date_label} (суббота):\n\n" + "\n\n".join(parts))
-        else:
-            text = _format_day_table_html("Суббота", [])
+        # Если нет ни одного профиля с уроками — не отправляем
+        has_lessons = any(lessons for _, lessons in profiles)
+        if not profiles or not has_lessons:
+            return
+        parts = [_format_day_table_html(f"Суббота — {label}", lessons) for label, lessons in profiles]
+        text = _truncate_message(f"📅 Расписание на {date_label} (суббота):\n\n" + "\n\n".join(parts))
     else:
         day, lessons = _get_lessons_for_date(target_date)
+        if not lessons:
+            return  # Пустой день — не отправляем
         header = f"📅 Расписание на {date_label} ({day}):\n\n"
         text = _truncate_message(header + _format_day_table_html(day, lessons))
     await bot_app.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
