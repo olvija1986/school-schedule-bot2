@@ -2401,25 +2401,9 @@ _ALICE_SUBJECT_EXPAND: dict[str, str] = {
     "матем.":                   "Математика",
     "алг.":                     "Алгебра",
     "геом.":                    "Геометрия",
-    # Практикум по математике
-    "практ. по мат-ке":         "Практикум по математике",
-    "практ.по мат-ке":          "Практикум по математике",
-    # Олимпийская математика
-    "олимп. мат-ка":            "Олимпиадная математика",
-    "олимп.мат-ка":             "Олимпиадная математика",
-    # Углублённая математика
-    "углубл. мате-ка":          "Углублённая математика",
-    "углубл.мате-ка":           "Углублённая математика",
-    # Алгоритмика
-    "алгоритмика":              "Алгоритмика",
-    # Экология растений
-    "экология растений":        "Экология растений",
-    # Введение в химию
-    "введение в химию":         "Введение в химию",
-    # Смысловое чтение
-    "смысловое чтение":         "Смысловое чтение",
-    # Прочие предметы
+    # ОБЖ
     "обж":                      "Основы безопасности жизнедеятельности",
+    # Прочие предметы
     "инф.":                     "Информатика",
     "биол.":                    "Биология",
     "хим.":                     "Химия",
@@ -2431,10 +2415,56 @@ _ALICE_SUBJECT_EXPAND: dict[str, str] = {
     "иностр. яз.":              "Иностранный язык",
 }
 
+# Паттерны нечёткого поиска: список (regex, замена).
+# Проверяются по вхождению (re.search), применяются если точного совпадения не нашлось.
+_ALICE_SUBJECT_PATTERNS: list[tuple[str, str]] = [
+    # Практикум по математике
+    (r"прак[а-я.]*\s*по\s*мат",             "Практикум по математике"),
+    (r"практ[а-я.]*\s*мат",                 "Практикум по математике"),
+    (r"практикум\s*мат",                    "Практикум по математике"),
+    # Олимпиадная математика
+    (r"олимп[а-я.]*\s*мат",                 "Олимпиадная математика"),
+    # Углублённая математика
+    (r"углубл[а-я.]*\s*мат",                "Углублённая математика"),
+    (r"углуб[а-я.\s]*мат",                  "Углублённая математика"),
+    # Алгоритмика
+    (r"алг[оа][а-я.]*тм",                   "Алгоритмика"),
+    (r"алг[- ]?ка",                         "Алгоритмика"),
+    (r"алгорит[а-я.]*ка",                   "Алгоритмика"),
+    # Экология растений
+    (r"эк[оа][а-я.]*[.\s]*раст",            "Экология растений"),
+    (r"экол[а-я.]*[.\s]*раст",              "Экология растений"),
+    (r"эк[.\s]+раст",                       "Экология растений"),
+    # Смысловое чтение
+    (r"смысл[а-я.]*\s*чт",                  "Смысловое чтение"),
+    (r"см[.]?\s*чт",                        "Смысловое чтение"),
+    # Финансовая грамотность
+    (r"фин[а-я.]*\s*грам",                  "Финансовая грамотность"),
+    # Инфотех группы
+    (r"инфотех[а-я\s.]*1",                  "Инфотех первая группа"),
+    (r"инфотех[а-я\s.]*2",                  "Инфотех вторая группа"),
+    (r"инфотех[а-я\s.]*3",                  "Инфотех третья группа"),
+    # Общеобразовательный
+    (r"общеобр[а-я.\-]*",                   "Общеобразовательный"),
+    # Введение в химию
+    (r"введ[а-я.]*\s*хим",                  "Введение в химию"),
+    # Практикум по математике (ещё вариант «прак по матке» и подобные)
+    (r"прак[а-я.]*\s*матк",                 "Практикум по математике"),
+]
+
 
 def _alice_expand_subject(name: str) -> str:
-    """Заменяет сокращение предмета на полное название для TTS."""
-    return _ALICE_SUBJECT_EXPAND.get(name.lower().strip(), name)
+    """Заменяет сокращение предмета на полное название для TTS.
+    Сначала точное совпадение по словарю, затем нечёткий поиск по паттернам.
+    """
+    key = name.lower().strip()
+    if key in _ALICE_SUBJECT_EXPAND:
+        return _ALICE_SUBJECT_EXPAND[key]
+    # Нечёткий поиск — ищем паттерн как вхождение
+    for pattern, full in _ALICE_SUBJECT_PATTERNS:
+        if re.search(pattern, key, re.IGNORECASE):
+            return full
+    return name
 
 
 def _alice_clean_tts(text: str) -> str:
@@ -2488,19 +2518,21 @@ def _alice_day_text(day_type: str = "today") -> tuple[str, str]:
 
     if day_ru == "Суббота":
         profiles = _get_saturday_profiles_for_date(target_date)
-        if not profiles:
+        active = [(label, lessons) for label, lessons in profiles if lessons]
+        if not active:
             msg = f"{prefix}, суббота\nЗанятий нет"
             return msg, f"{prefix} суббота. Занятий нет."
-        text_parts, tts_parts = [], []
-        for label, lessons in profiles:
-            if lessons:
-                text_parts.append(f"[ {label} ]\n{_alice_format_screen(lessons)}")
-                tts_parts.append(f"Профиль {label}. {_alice_format_tts(lessons)}")
-        if not text_parts:
-            msg = f"{prefix}, суббота\nЗанятий нет"
-            return msg, f"{prefix} суббота. Занятий нет."
-        header = f"{prefix}, суббота"
-        return header + "\n\n" + "\n\n".join(text_parts), f"{prefix} суббота. " + " ".join(tts_parts)
+        if len(active) == 1:
+            # Только один профиль — показываем сразу
+            label, lessons = active[0]
+            text_out = f"{prefix}, суббота — {label}\n{_alice_format_screen(lessons)}"
+            tts_out  = f"{prefix} суббота. {_alice_format_tts(lessons)}"
+            return text_out, tts_out
+        # Несколько профилей — показываем список и кнопки
+        labels_list = ", ".join(label for label, _ in active)
+        text_out = f"{prefix}, суббота.\nПрофили: {labels_list}.\nВыбери профиль или скажи его название."
+        tts_out  = f"{prefix} суббота. Доступны профили: {labels_list}. Назови нужный профиль."
+        return text_out, tts_out
 
     _, lessons = _get_lessons_for_date(target_date)
     if not lessons:
@@ -2538,6 +2570,103 @@ def _alice_resp(text: str, tts: str, session: dict, end_session: bool = False,
     }
 
 
+# Маппинг голосовых команд к ключам профилей субботы
+_ALICE_SAT_PROFILE_TRIGGERS: list[tuple[str, str]] = [
+    ("физмат",          "Физмат"),
+    ("физико",          "Физмат"),
+    ("биохим",          "Биохим"),
+    ("биолог",          "Биохим"),
+    ("химия",           "Биохим"),
+    ("инфотех",         None),       # нужно уточнение — 1 или 2
+    ("инфотех первый",  "Инфотех_1"),
+    ("инфотех 1",       "Инфотех_1"),
+    ("первый",          "Инфотех_1"),
+    ("инфотех второй",  "Инфотех_2"),
+    ("инфотех 2",       "Инфотех_2"),
+    ("второй",          "Инфотех_2"),
+    ("общеобр",         "Общеобразовательный_3"),
+    ("третий",          "Общеобразовательный_3"),
+    ("соцгум",          "Соцгум"),
+    ("социально",       "Соцгум"),
+    ("гуманит",         "Соцгум"),
+]
+
+
+def _alice_saturday_buttons(day_type: str = "today") -> list[dict] | None:
+    """Возвращает кнопки профилей субботы если сегодня/завтра суббота с несколькими профилями."""
+    now = datetime.now(tz=_get_tz())
+    target_date = now.date() if day_type == "today" else (now + timedelta(days=1)).date()
+    if target_date.strftime("%A") != "Saturday":
+        return None
+    profiles = _get_saturday_profiles_for_date(target_date)
+    active = [(label, lessons) for label, lessons in profiles if lessons]
+    if len(active) <= 1:
+        return None
+    buttons = [{"title": label, "hide": True} for label, _ in active]
+    buttons += [{"title": "На завтра", "hide": True}]
+    return buttons
+
+
+def _alice_try_saturday_profile(text: str, session: dict) -> dict | None:
+    """Если пользователь назвал профиль субботы — возвращает расписание этого профиля."""
+    now = datetime.now(tz=_get_tz())
+    # Проверяем сегодня или завтра
+    for day_type, target_date in [
+        ("today",    now.date()),
+        ("tomorrow", (now + timedelta(days=1)).date()),
+    ]:
+        if target_date.strftime("%A") != "Saturday":
+            continue
+        profiles = _get_saturday_profiles_for_date(target_date)
+        active_keys = {
+            next((k for k, lbl in SATURDAY_PROFILE_LABELS.items() if lbl == label or k == label), None)
+            for label, lessons in profiles if lessons
+        }
+        active_keys.discard(None)
+        if not active_keys:
+            continue
+
+        # Ищем совпадение профиля в тексте команды
+        matched_key: str | None = None
+        for trigger, profile_key in _ALICE_SAT_PROFILE_TRIGGERS:
+            if trigger in text:
+                if profile_key in active_keys:
+                    matched_key = profile_key
+                    break
+                elif profile_key is None:
+                    # «Инфотех» без номера — просим уточнить
+                    msg = "Уточни: Инфотех первый или Инфотех второй?"
+                    buttons = []
+                    if "Инфотех_1" in active_keys:
+                        buttons.append({"title": "Инфотех первый", "hide": True})
+                    if "Инфотех_2" in active_keys:
+                        buttons.append({"title": "Инфотех второй", "hide": True})
+                    return _alice_resp(msg, msg, session, buttons=buttons)
+
+        # Также проверяем прямое совпадение с меткой профиля
+        if not matched_key:
+            for label, lessons in profiles:
+                if lessons and label.lower() in text:
+                    matched_key = next(
+                        (k for k, lbl in SATURDAY_PROFILE_LABELS.items() if lbl == label or k == label), None)
+                    if matched_key:
+                        break
+
+        if matched_key:
+            lessons_for_profile = next(
+                (lessons for label, lessons in profiles
+                 if SATURDAY_PROFILE_LABELS.get(matched_key, matched_key) == label or matched_key == label),
+                []
+            )
+            label_out = SATURDAY_PROFILE_LABELS.get(matched_key, matched_key)
+            prefix = "Сегодня" if day_type == "today" else "Завтра"
+            display = f"{prefix}, суббота — {label_out}\n{_alice_format_screen(lessons_for_profile)}"
+            tts = f"{prefix} суббота, {label_out}. {_alice_format_tts(lessons_for_profile)}"
+            return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
+                               session, buttons=_ALICE_MAIN_BUTTONS)
+    return None
+
+
 def _alice_handle_request(req_body: dict) -> dict:
     """Основная логика обработки запроса от Алисы."""
     session = req_body.get("session", {})
@@ -2548,15 +2677,15 @@ def _alice_handle_request(req_body: dict) -> dict:
     is_new = session.get("new", False)
 
     # ── Расписание на сегодня ────────────────────────────────────────────────
-    # Проверяем ДО приветствия: команда может прийти сразу при запуске навыка
-    # («Алиса, попроси <навык> на сегодня»)
     if any(w in text_to_check for w in [
         "сегодня", "на сегодня", "расписание на сегодня",
         "today", "сейчас", "что сегодня", "какие сегодня", "какое сегодня",
     ]):
         display, tts = _alice_day_text("today")
+        # Если суббота с несколькими профилями — добавляем кнопки выбора
+        buttons = _alice_saturday_buttons("today") or _ALICE_MAIN_BUTTONS
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
+                           session, buttons=buttons)
 
     # ── Расписание на завтра ─────────────────────────────────────────────────
     if any(w in text_to_check for w in [
@@ -2564,16 +2693,23 @@ def _alice_handle_request(req_body: dict) -> dict:
         "tomorrow", "что завтра", "какие завтра", "какое завтра",
     ]):
         display, tts = _alice_day_text("tomorrow")
+        buttons = _alice_saturday_buttons("tomorrow") or _ALICE_MAIN_BUTTONS
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
+                           session, buttons=buttons)
 
     # ── Общий запрос расписания → сегодня ───────────────────────────────────
     if any(w in text_to_check for w in [
         "расписание", "уроки", "занятия", "какие уроки", "что за уроки",
     ]):
         display, tts = _alice_day_text("today")
+        buttons = _alice_saturday_buttons("today") or _ALICE_MAIN_BUTTONS
         return _alice_resp(_alice_truncate(display, 1020), _alice_truncate(tts),
-                           session, buttons=_ALICE_MAIN_BUTTONS)
+                           session, buttons=buttons)
+
+    # ── Выбор профиля субботы ────────────────────────────────────────────────
+    sat_profile_resp = _alice_try_saturday_profile(text_to_check, session)
+    if sat_profile_resp:
+        return sat_profile_resp
 
     # ── Приветствие / помощь — только если команды нет или явный запрос ─────
     if is_new or not command or text_to_check in {"помощь", "help", "что ты умеешь"}:
